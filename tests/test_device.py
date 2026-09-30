@@ -86,6 +86,9 @@ def test_device_info_has_no_parent_without_a_station() -> None:
             id="unnamed_inverter_falls_back_to_serial",
         ),
         pytest.param(
+            "SMART_METER", "Meter 1", "Meter 1", id="meter_not_prefixed_twice"
+        ),
+        pytest.param(
             "SOMETHING_NEW", "Widget 1", "Widget 1", id="unknown_type_kept_verbatim"
         ),
     ],

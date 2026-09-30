@@ -23,18 +23,16 @@ MOCK_INVERTER_SN = "GW0000SN000TEST1"
 MOCK_METERS = [
     {
         "sn": "METER1",
-        "name": "Smart Meter 1",
+        "name": "Meter 1",
         "deviceType": "SMART_METER",
-        "subtype": "GM1000",
         "powerstation_id": MOCK_POWER_STATION_ID,
         "meter_power": 1351,
         "meter_phase_a_power": -0.451,
     },
     {
         "sn": "METER2",
-        "name": "Smart Meter 2",
+        "name": "Meter 2",
         "deviceType": "SMART_METER",
-        "subtype": "GM1000",
         "powerstation_id": MOCK_POWER_STATION_ID,
         "meter_power": 42,
         "meter_phase_a_power": 0.1,
@@ -121,15 +119,15 @@ async def test_each_meter_becomes_its_own_device(hass: HomeAssistant) -> None:
     )
     assert station is not None
 
-    for serial, expected_name in (
-        ("METER1", "Smart Meter 1"),
-        ("METER2", "Smart Meter 2"),
-    ):
+    for serial, expected_name in (("METER1", "Meter 1"), ("METER2", "Meter 2")):
         device = dev_reg.async_get_device_by_identifier(
             (DOMAIN, serial), entry.entry_id
         )
         assert device is not None, serial
+        # SEMS names meters "Meter N"; no "Smart Meter Meter 1".
         assert device.name == expected_name
+        # SEMS reports no model for a meter.
+        assert device.model == "Smart Meter"
         assert device.via_device_id == station.id
 
 

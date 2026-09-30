@@ -35,7 +35,9 @@ def device_display_name(serial_number: str, inverter_data: dict[str, Any]) -> st
     label = _DEVICE_TYPE_LABELS.get(device_type)
     if not label:
         return name
-    if label.casefold() in name.casefold():
+    # Compare on the label's noun: SEMS calls a smart meter "Meter 1", so the
+    # full label never matches and the name would become "Smart Meter Meter 1".
+    if label.rsplit(" ", 1)[-1].casefold() in name.casefold():
         return name
     return f"{label} {name}"
 
@@ -113,7 +115,12 @@ def device_info_for_meter(
         identifiers={(DOMAIN, serial_number)},
         name=device_display_name(serial_number, meter_data),
         manufacturer="GoodWe",
-        model=meter_data.get("model_type") or meter_data.get("subtype") or "unknown",
+        # SEMS reports no model for a meter, so fall back to what it is.
+        model=(
+            meter_data.get("model_type")
+            or meter_data.get("subtype")
+            or _DEVICE_TYPE_LABELS["SMART_METER"]
+        ),
     )
 
     _set_parent_station(device_info, meter_data, station_device_id)
