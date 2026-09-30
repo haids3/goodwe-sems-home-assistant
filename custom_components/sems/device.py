@@ -6,6 +6,11 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
 
+# HA replaced DeviceInfo's `via_device` identifier tuple with `via_device_id`,
+# the registry id. Both forms are supported here because hacs.json still allows
+# versions that predate the change.
+_SUPPORTS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
+
 
 def station_identifier(station_id: str) -> tuple[str, str]:
     """Return the device registry identifier of a power station."""
@@ -49,8 +54,11 @@ def device_info_for_inverter(
 
     # Nest the inverter under its station so a single-inverter system does not
     # show two unrelated top-level devices.
-    if station_device_id:
-        device_info["via_device_id"] = station_device_id
+    if _SUPPORTS_VIA_DEVICE_ID:
+        if station_device_id:
+            device_info["via_device_id"] = station_device_id
+    elif station_id := inverter_data.get("powerstation_id"):
+        device_info["via_device"] = station_identifier(station_id)
 
     return device_info
 
