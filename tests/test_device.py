@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from custom_components.sems.const import DOMAIN
 from custom_components.sems.device import device_info_for_inverter
 
@@ -61,3 +63,48 @@ def test_device_info_has_no_parent_without_a_station() -> None:
 
     assert "via_device" not in device_info
     assert "via_device_id" not in device_info
+
+
+@pytest.mark.parametrize(
+    ("device_type", "name", "expected"),
+    [
+        pytest.param(
+            "ENERGY_STORAGE_INTEGRATED_CABINET",
+            "All-in-One 1",
+            "All-in-One 1",
+            id="all_in_one_not_prefixed_as_inverter",
+        ),
+        pytest.param(
+            "BATTERY_RACK", "Battery Rack 4", "Battery Rack 4", id="battery_rack"
+        ),
+        pytest.param("DONGLE", "Dongle 1", "Dongle 1", id="dongle"),
+        pytest.param("INVERTER", "Inverter 2", "Inverter 2", id="inverter_not_doubled"),
+        pytest.param(
+            "INVERTER",
+            None,
+            "Inverter GW0000SN000TEST1",
+            id="unnamed_inverter_falls_back_to_serial",
+        ),
+        pytest.param(
+            "SOMETHING_NEW", "Widget 1", "Widget 1", id="unknown_type_kept_verbatim"
+        ),
+    ],
+)
+def test_device_name_matches_the_device_type(
+    device_type: str, name: str | None, expected: str
+) -> None:
+    """Only inverters are called inverters."""
+    device_info = device_info_for_inverter(
+        "GW0000SN000TEST1", {"name": name, "deviceType": device_type}
+    )
+
+    assert device_info["name"] == expected
+
+
+def test_legacy_payload_without_type_keeps_the_inverter_prefix() -> None:
+    """Legacy SEMS payloads have no deviceType and only describe inverters."""
+    device_info = device_info_for_inverter(
+        "GW0000SN000TEST1", {"name": "Garage", "model_type": "GW3000-NS"}
+    )
+
+    assert device_info["name"] == "Inverter Garage"

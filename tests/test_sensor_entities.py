@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -210,6 +211,7 @@ async def test_failed_inverter_telemetry_marks_only_its_sensors_unavailable(
     coordinator = entry.runtime_data.coordinator
     coordinator.async_set_updated_data(
         SemsData(
+            station_id=MOCK_POWER_STATION_ID,
             inverters={
                 "GW0000SN000TEST1": {
                     "etotal": 18843.2,
@@ -236,6 +238,7 @@ async def test_failed_inverter_telemetry_marks_only_its_sensors_unavailable(
 
     coordinator.async_set_updated_data(
         SemsData(
+            station_id=MOCK_POWER_STATION_ID,
             inverters={
                 "GW0000SN000TEST1": {
                     "pac": 589,
@@ -375,6 +378,7 @@ async def test_failed_smart_meter_telemetry_marks_only_meter_sensors_unavailable
     coordinator = entry.runtime_data.coordinator
     coordinator.async_set_updated_data(
         SemsData(
+            station_id=MOCK_POWER_STATION_ID,
             inverters={inverter["sn"]: inverter},
             homekit={"sn": "METER-SN-1", "load": 1351},
             unavailable_homekit_sources={"telemetry"},
@@ -546,6 +550,7 @@ async def test_all_entities_exist(
     inverter_data = MOCK_GET_DATA_ACTUAL_JSON["data"]["inverter"][0]["invert_full"]
     inverter_sn = inverter_data["sn"]
     data = SemsData(
+        station_id=MOCK_POWER_STATION_ID,
         inverters={inverter_sn: inverter_data},
         currency=MOCK_GET_DATA_ACTUAL_JSON["data"]["kpi"]["currency"],
     )
@@ -1099,3 +1104,52 @@ async def test_homekit_sensors_handle_empty_strings_at_night(
     assert load_status_state is not None
     # loadStatus=1 * gridStatus=-1 = -1
     assert load_status_state.state == "-1"
+
+
+async def test_flow_sensors_attach_to_the_station_device(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Station-level flow data belongs to the station, not a shared device."""
+    del enable_custom_integrations
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test",
+        data={
+            CONF_USERNAME: "user",
+            CONF_PASSWORD: "pass",
+            CONF_STATION_ID: MOCK_POWER_STATION_ID,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    with _mock_no_battery_api(MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    dev_reg = dr.async_get(hass)
+    # The old constant-identifier device was shared by every station of an account.
+    assert (
+        dev_reg.async_get_device_by_identifier((DOMAIN, "homeKit"), entry.entry_id)
+        is None
+    )
+
+    station = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"station-{MOCK_POWER_STATION_ID}"), entry.entry_id
+    )
+    assert station is not None
+
+    homekit_sn = (
+        MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON.get("homKit", {}).get("sn")
+        or "GW-HOMEKIT-NO-SERIAL"
+    )
+    ent_reg = er.async_get(hass)
+    for key in ("pv", "grid", "load", "battery"):
+        entity_id = ent_reg.async_get_entity_id(
+            Platform.SENSOR, DOMAIN, f"{homekit_sn}-{key}"
+        )
+        assert entity_id is not None, key
+        registry_entry = ent_reg.async_get(entity_id)
+        assert registry_entry is not None
+        assert registry_entry.device_id == station.id, key

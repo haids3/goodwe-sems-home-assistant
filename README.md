@@ -58,8 +58,10 @@ not replace missing values with zero.
 
 ### Station status, grid connection and alarms
 
-Alongside the per-inverter entities, each station gets its own device holding
-station-wide entities:
+Each station gets its own device, and the inverters, battery racks and dongles
+of that station appear underneath it. The station device holds everything that
+describes the site as a whole — the station-level power flow (PV, grid, load,
+battery and state of charge) plus:
 
 | Entity | Type | Description |
 |---|---|---|
@@ -81,6 +83,16 @@ from the English name supplied by SEMS.
 While no alarm is occurring, the alarm list is re-read every five minutes
 rather than on every update, so a station with only historical alarms does not
 add a request to each refresh. An occurring alarm is re-read every refresh.
+
+Device-specific readings stay on their own device, and each device is named for
+what it actually is: an `All-in-One 1`, `Battery Rack 4` or `Dongle 1` is no
+longer labelled as an inverter.
+
+Upgrading from a version before this change moves the station-level power-flow
+sensors off the old shared `HomeKit` device and onto the station. Their entity
+IDs and history are preserved, so they keep their original `homekit_` names.
+Accounts with several stations previously had all of those sensors collapsed
+onto that one device, where stations were told apart only by a `_2`/`_3` suffix.
 
 ### Optional: control the inverter power output via the "Inverter Control" switch
 

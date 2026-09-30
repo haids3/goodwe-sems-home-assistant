@@ -158,6 +158,7 @@ class SemsData:
     """Runtime SEMS data returned by the coordinator."""
 
     inverters: dict[str, dict[str, Any]]
+    station_id: str
     batteries: dict[str, dict[str, dict[str, Any]]] | None = None
     immediate_charging: dict[str, dict[str, Any]] | None = None
     homekit: dict[str, Any] | None = None
@@ -611,6 +612,7 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
 
             data = SemsData(
                 inverters=inverters_by_sn,
+                station_id=self.station_id,
                 batteries=batteries,
                 homekit=homekit,
                 currency=currency,

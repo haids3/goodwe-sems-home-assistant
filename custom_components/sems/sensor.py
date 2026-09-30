@@ -549,17 +549,11 @@ def sensor_options_for_data(
     # HomeKit powerflow + SEMS charts live in `SemsData.homekit`.
     if data.homekit is not None:
         homekit_sn = get_homekit_sn(data.homekit) or "GW-HOMEKIT-NO-SERIAL"
-        serial_backwards_compatibility = (
-            "homeKit"  # the old code uses homeKit for the serial number
-        )
-        device_info = DeviceInfo(
-            identifiers={
-                # Serial numbers are unique identifiers within a specific domain
-                (DOMAIN, serial_backwards_compatibility)
-            },
-            name="HomeKit",
-            manufacturer="GoodWe",
-        )
+        # This is station-level flow data, so it belongs to the station. The old
+        # "HomeKit" device used a constant identifier, which put every station of
+        # a multi-station account onto one shared device. Unique IDs are still
+        # derived from homekit_sn, so entity IDs and history are unaffected.
+        device_info = device_info_for_station(data.station_id, data.station_info)
 
         def status_value_handler(
             status_path: SemsValuePath,

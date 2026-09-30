@@ -12,6 +12,33 @@ from .const import DOMAIN
 _SUPPORTS_VIA_DEVICE_ID = "via_device_id" in DeviceInfo.__annotations__
 
 
+# SEMS+ device names already describe the device ("Battery Rack 4", "Dongle 1"),
+# so these labels are only prepended when the name does not carry them.
+_DEVICE_TYPE_LABELS = {
+    "INVERTER": "Inverter",
+    "ENERGY_STORAGE_INTEGRATED_CABINET": "All-in-One",
+    "BATTERY_RACK": "Battery Rack",
+    "DONGLE": "Dongle",
+}
+
+
+def device_name_for_inverter(serial_number: str, inverter_data: dict[str, Any]) -> str:
+    """Return a display name that matches what the device actually is."""
+    name = str(inverter_data.get("name") or serial_number)
+
+    device_type = inverter_data.get("deviceType")
+    if not device_type:
+        # Legacy SEMS payloads carry no type and only ever describe inverters.
+        return f"Inverter {name}"
+
+    label = _DEVICE_TYPE_LABELS.get(device_type)
+    if not label:
+        return name
+    if label.casefold() in name.casefold():
+        return name
+    return f"{label} {name}"
+
+
 def station_identifier(station_id: str) -> tuple[str, str]:
     """Return the device registry identifier of a power station."""
     return (DOMAIN, f"station-{station_id}")
@@ -28,8 +55,6 @@ def device_info_for_inverter(
     same inverter are grouped under the same device and show a consistent name.
     """
 
-    name = inverter_data.get("name") or serial_number
-
     firmware_version = inverter_data.get("firmwareversion")
     if firmware_version in (None, ""):
         sw_version = "unknown"
@@ -40,7 +65,7 @@ def device_info_for_inverter(
     # is guaranteed to contain `model_type`, `firmwareversion`, etc.
     device_info = DeviceInfo(
         identifiers={(DOMAIN, serial_number)},
-        name=f"Inverter {name}",
+        name=device_name_for_inverter(serial_number, inverter_data),
         manufacturer="GoodWe",
         model=inverter_data.get("model_type", "unknown"),
         sw_version=sw_version,
