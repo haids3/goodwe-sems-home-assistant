@@ -28,6 +28,9 @@ Goal: extend a Home Assistant custom integration with alarms + on/off-grid statu
 Community SEMS API clients (pysems, etc.) already have auth nailed, so auth is included
 here only for context/cross-reference — the new work is alarms, grid status, and energy flow.
 
+> See [`handover-2026-09-30.md`](handover-2026-09-30.md) for the fork's work log,
+> what remains unsolved, and the device-control thread in particular.
+>
 > **Verified against live accounts on 2026-09-29.** The alarms, grid-status and
 > flow endpoints below were called for real and the responses checked. Several
 > claims made from the decompile alone turned out to be wrong; those are
