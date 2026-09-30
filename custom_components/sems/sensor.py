@@ -45,6 +45,7 @@ from .const import (
     DOMAIN,
     GOODWE_SPELLING,
     GRID_STATUS_LABELS,
+    HOMEKIT_NO_SERIAL,
     STATION_STATUS_LABELS,
     STATION_STATUS_UNKNOWN,
     STATUS_LABELS,
@@ -161,6 +162,20 @@ def get_homekit_sn(homekit_data: dict[str, Any] | None) -> str | None:
         return None
     value = homekit_data.get("sn")
     return value if isinstance(value, str) else None
+
+
+def flow_namespace(data: SemsData) -> str:
+    """Return the unique-ID namespace for station-level flow sensors.
+
+    A real smart-meter serial is used as-is, for backwards compatibility. Without
+    one the namespace is station-specific: the old constant was shared, so a
+    second meter-less station of the same account had its flow entities rejected
+    as duplicates.
+    """
+    homekit_sn = get_homekit_sn(data.homekit)
+    if homekit_sn is None or homekit_sn == HOMEKIT_NO_SERIAL:
+        return f"GW-HOMEKIT-{data.station_id}"
+    return homekit_sn
 
 
 def get_has_existing_homekit_entity(
@@ -548,7 +563,7 @@ def sensor_options_for_data(
 
     # HomeKit powerflow + SEMS charts live in `SemsData.homekit`.
     if data.homekit is not None:
-        homekit_sn = get_homekit_sn(data.homekit) or "GW-HOMEKIT-NO-SERIAL"
+        homekit_sn = flow_namespace(data)
         # This is station-level flow data, so it belongs to the station. The old
         # "HomeKit" device used a constant identifier, which put every station of
         # a multi-station account onto one shared device. Unique IDs are still
@@ -900,7 +915,8 @@ async def async_setup_entry(
     # _LOGGER.debug("Initial coordinator data: %s", coordinator.data)
 
     # Backwards compatibility note: keep IDs stable for existing entity registry entries.
-    homekit_sn = get_homekit_sn(coordinator.data.homekit) or "GW-HOMEKIT-NO-SERIAL"
+    _migrate_fallback_namespace(hass, config_entry, coordinator.data)
+    homekit_sn = flow_namespace(coordinator.data)
     _migrate_unique_ids(
         hass,
         {
@@ -956,6 +972,25 @@ async def async_setup_entry(
     sensors.append(SemsActiveAlarmsSensor(coordinator, station_id))
 
     async_add_entities(sensors)
+
+
+def _migrate_fallback_namespace(
+    hass: HomeAssistant, config_entry: ConfigEntry, data: SemsData
+) -> None:
+    """Move entities off the shared fallback namespace onto a station-specific one."""
+    namespace = flow_namespace(data)
+    if namespace == HOMEKIT_NO_SERIAL:
+        return
+
+    legacy_prefix = f"{HOMEKIT_NO_SERIAL}-"
+    ent_reg = er.async_get(hass)
+    migrations = {
+        entity.unique_id: f"{namespace}-{entity.unique_id.removeprefix(legacy_prefix)}"
+        for entity in er.async_entries_for_config_entry(ent_reg, config_entry.entry_id)
+        if entity.unique_id.startswith(legacy_prefix)
+    }
+    if migrations:
+        _migrate_unique_ids(hass, migrations)
 
 
 def _migrate_unique_ids(hass: HomeAssistant, migrations: dict[str, str]) -> None:

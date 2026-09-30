@@ -22,6 +22,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     GOODWE_SPELLING,
+    HOMEKIT_NO_SERIAL,
     PLATFORMS,
     account_key,
     coerce_api_int,
@@ -602,7 +603,7 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
                 # Goodwe 'Power Meter' (not HomeKit) doesn't have a sn
                 # Let's put something in, otherwise we can't see the data.
                 if powerflow["sn"] is None:
-                    powerflow["sn"] = "GW-HOMEKIT-NO-SERIAL"
+                    powerflow["sn"] = HOMEKIT_NO_SERIAL
 
                 # _LOGGER.debug("homeKit sn: %s", result["homKit"]["sn"])
                 # This seems more accurate than the Chart_sum

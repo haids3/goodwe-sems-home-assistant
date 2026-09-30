@@ -15,6 +15,12 @@ PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
 
 CONF_STATION_ID = "powerstation_id"
 
+# GoodWe "Power Meter" installations report no serial. This constant stood in for
+# one, which made every meter-less station of an account share a unique-ID
+# namespace; it is now only a sentinel, normalised per station in the sensor
+# platform.
+HOMEKIT_NO_SERIAL = "GW-HOMEKIT-NO-SERIAL"
+
 DEFAULT_SCAN_INTERVAL = 60  # timedelta(seconds=60)
 
 

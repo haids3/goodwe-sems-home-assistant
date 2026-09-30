@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
@@ -29,6 +30,7 @@ from .fixtures import (
 )
 
 MOCK_POWER_STATION_ID = "12345678-1234-5678-9abc-123456789abc"
+MOCK_FLOW_NAMESPACE = f"GW-HOMEKIT-{MOCK_POWER_STATION_ID}"
 
 
 def _station_unique_ids(station_id: str) -> set[str]:
@@ -310,7 +312,7 @@ async def test_web_meter_data_keeps_registered_homekit_serial(
     existing_entity_id = ent_reg.async_get_or_create(
         Platform.SENSOR,
         DOMAIN,
-        "GW-HOMEKIT-NO-SERIAL-import-energy-total",
+        f"{MOCK_FLOW_NAMESPACE}-import-energy-total",
         config_entry=entry,
     ).entity_id
 
@@ -331,7 +333,7 @@ async def test_web_meter_data_keeps_registered_homekit_serial(
     assert state is not None
     assert float(state.state) == 20314.77
     export_entity_id = ent_reg.async_get_entity_id(
-        Platform.SENSOR, DOMAIN, "GW-HOMEKIT-NO-SERIAL-export-energy"
+        Platform.SENSOR, DOMAIN, f"{MOCK_FLOW_NAMESPACE}-export-energy"
     )
     assert export_entity_id is not None
     assert float(hass.states.get(export_entity_id).state) == 36.77
@@ -464,7 +466,7 @@ async def test_web_flow_load_sensors_report_consumption_while_exporting(
     ent_reg = er.async_get(hass)
     for suffix in ("-load", "-homekit"):
         entity_id = ent_reg.async_get_entity_id(
-            Platform.SENSOR, DOMAIN, f"GW-HOMEKIT-NO-SERIAL{suffix}"
+            Platform.SENSOR, DOMAIN, f"{MOCK_FLOW_NAMESPACE}{suffix}"
         )
         assert entity_id is not None
         assert float(hass.states.get(entity_id).state) == 500.0
@@ -510,7 +512,7 @@ async def test_unique_id_migration_powerflow_to_homekit_sn(
 
     homekit_sn = (
         MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON.get("homKit", {}).get("sn")
-        or "GW-HOMEKIT-NO-SERIAL"
+        or MOCK_FLOW_NAMESPACE
     )
     expected_migrations = {
         "powerflow-import-energy": f"{homekit_sn}-import-energy",
@@ -675,7 +677,7 @@ async def test_exact_unique_ids_homekit_powerflow_fixture(
     sn = MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON["inverter"][0]["invert_full"]["sn"]
     homekit_sn = (
         MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON.get("homKit", {}).get("sn")
-        or "GW-HOMEKIT-NO-SERIAL"
+        or MOCK_FLOW_NAMESPACE
     )
     expected_unique_ids = {
         # Regular inverter sensors
@@ -785,7 +787,7 @@ async def test_homekit_powerflow_values_from_api_fixture(
 
     homekit_sn = (
         MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON.get("homKit", {}).get("sn")
-        or "GW-HOMEKIT-NO-SERIAL"
+        or MOCK_FLOW_NAMESPACE
     )
 
     load_entity_id = ent_reg.async_get_entity_id(
@@ -987,7 +989,7 @@ def _build_homekit_test_data(
         "hasPowerflow": True,
         "hasEnergeStatisticsCharts": False,
         "homKit": {
-            "sn": None,  # Will use GW-HOMEKIT-NO-SERIAL as default
+            "sn": None,  # No serial: falls back to the station namespace
             "homeKitLimit": False,
         },
         "powerflow": {
@@ -1035,7 +1037,9 @@ async def test_homekit_sensors_handle_empty_strings_at_night(
         await hass.async_block_till_done()
 
     ent_reg = er.async_get(hass)
-    homekit_sn = "GW-HOMEKIT-NO-SERIAL"  # Default when sn is None
+    homekit_sn = (
+        MOCK_FLOW_NAMESPACE  # The station-specific fallback used when sn is None
+    )
 
     # Verify entities are created and have values
     load_entity_id = ent_reg.async_get_entity_id(
@@ -1142,7 +1146,7 @@ async def test_flow_sensors_attach_to_the_station_device(
 
     homekit_sn = (
         MOCK_GET_DATA_HOMEKIT_ACTUAL_JSON.get("homKit", {}).get("sn")
-        or "GW-HOMEKIT-NO-SERIAL"
+        or MOCK_FLOW_NAMESPACE
     )
     ent_reg = er.async_get(hass)
     for key in ("pv", "grid", "load", "battery"):
@@ -1153,3 +1157,118 @@ async def test_flow_sensors_attach_to_the_station_device(
         registry_entry = ent_reg.async_get(entity_id)
         assert registry_entry is not None
         assert registry_entry.device_id == station.id, key
+
+
+MOCK_SECOND_STATION_ID = "87654321-4321-8765-cba9-987654321cba"
+
+
+def _add_entry(hass: HomeAssistant, station_id: str) -> MockConfigEntry:
+    """Add a config entry for one station."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title=f"Station {station_id[:8]}",
+        unique_id=station_id,
+        data={
+            CONF_USERNAME: "user",
+            CONF_PASSWORD: "pass",
+            CONF_STATION_ID: station_id,
+        },
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_two_meterless_stations_do_not_share_a_flow_namespace(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Both meter-less stations of an account must get their flow entities.
+
+    The shared fallback namespace meant the second station's entities were
+    rejected as duplicate unique IDs.
+    """
+    del enable_custom_integrations
+
+    entries = [
+        _add_entry(hass, MOCK_POWER_STATION_ID),
+        _add_entry(hass, MOCK_SECOND_STATION_ID),
+    ]
+
+    def data_for_station(station_id: str) -> dict:
+        """Give each station its own inverter, as real accounts do."""
+        data = _build_homekit_test_data()
+        inverter = data["inverter"][0]["invert_full"]
+        inverter["sn"] = f"GW0000SN{station_id[:8].upper()}"
+        inverter["powerstation_id"] = station_id
+        return data
+
+    with (
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getData",
+            side_effect=data_for_station,
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getEnergyStorageIntegratedCabinets",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getWebStationBasicInfo",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmStatistics",
+            return_value={},
+        ),
+    ):
+        # Setting up the first entry loads the component, which brings up the
+        # remaining entries of the domain with it.
+        assert await hass.config_entries.async_setup(entries[0].entry_id)
+        await hass.async_block_till_done()
+
+    assert [entry.state for entry in entries] == [ConfigEntryState.LOADED] * 2
+
+    ent_reg = er.async_get(hass)
+    for station_id in (MOCK_POWER_STATION_ID, MOCK_SECOND_STATION_ID):
+        for key in ("pv", "load", "grid"):
+            unique_id = f"GW-HOMEKIT-{station_id}-{key}"
+            assert (
+                ent_reg.async_get_entity_id(Platform.SENSOR, DOMAIN, unique_id)
+                is not None
+            ), unique_id
+
+
+async def test_shared_fallback_entities_are_migrated_to_the_station_namespace(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Existing fallback-namespace entities keep their history."""
+    del enable_custom_integrations
+
+    entry = _add_entry(hass, MOCK_POWER_STATION_ID)
+
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "GW-HOMEKIT-NO-SERIAL-pv",
+        config_entry=entry,
+    )
+
+    with _mock_no_battery_api(_build_homekit_test_data()):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert (
+        ent_reg.async_get_entity_id(Platform.SENSOR, DOMAIN, "GW-HOMEKIT-NO-SERIAL-pv")
+        is None
+    )
+    assert (
+        ent_reg.async_get_entity_id(
+            Platform.SENSOR, DOMAIN, f"GW-HOMEKIT-{MOCK_POWER_STATION_ID}-pv"
+        )
+        is not None
+    )
