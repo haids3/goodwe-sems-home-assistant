@@ -39,3 +39,26 @@ def device_info_for_inverter(
             else None
         ),
     )
+
+
+def device_info_for_station(
+    station_id: str, station_info: dict[str, Any] | None
+) -> DeviceInfo:
+    """Build device info for the power station itself.
+
+    Station-wide entities (status, on/off-grid, alarms) group here rather than
+    under any single inverter.
+    """
+
+    info = station_info or {}
+    name = info.get("name") or station_id
+
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"station-{station_id}")},
+        name=f"Station {name}",
+        manufacturer="GoodWe",
+        model=info.get("powerStationTypeUser") or "unknown",
+        configuration_url=(
+            f"https://semsportal.com/PowerStation/PowerStatusSnMin/{station_id}"
+        ),
+    )

@@ -30,6 +30,15 @@ from .fixtures import (
 MOCK_POWER_STATION_ID = "12345678-1234-5678-9abc-123456789abc"
 
 
+def _station_unique_ids(station_id: str) -> set[str]:
+    """Return the unique IDs of the station-wide entities."""
+    return {
+        f"station-{station_id}-{key}"
+        # No on_grid: the mocked basic/info reports no gridStatus.
+        for key in ("status", "active_alarms", "online", "alarm")
+    }
+
+
 def test_status_code_5_is_normal() -> None:
     """Test that the SEMS+ active status code is mapped to Normal."""
     assert convert_status_to_label(5) == "Normal"
@@ -78,6 +87,18 @@ def _mock_no_battery_api(data: dict):
         ),
         patch(
             "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getWebStationBasicInfo",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmStatistics",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmPage",
             return_value={},
         ),
     ):
@@ -533,7 +554,11 @@ async def test_all_entities_exist(
         sensor.unique_id for sensor in sensor_options_for_data(data)
     }
     expected_switch_unique_ids = {f"{inverter_sn}-switch"}
-    expected_unique_ids = expected_sensor_unique_ids | expected_switch_unique_ids
+    expected_unique_ids = (
+        expected_sensor_unique_ids
+        | expected_switch_unique_ids
+        | _station_unique_ids(MOCK_POWER_STATION_ID)
+    )
 
     ent_reg = er.async_get(hass)
     actual_unique_ids = {
@@ -609,7 +634,7 @@ async def test_exact_unique_ids_single_inverter_fixture(
         f"{sn}-pmeter",
         f"{sn}-eChargeDay",
         f"{sn}-eDischargeDay",
-    }
+    } | _station_unique_ids(MOCK_POWER_STATION_ID)
 
     ent_reg = er.async_get(hass)
     actual_unique_ids = {
@@ -718,7 +743,7 @@ async def test_exact_unique_ids_homekit_powerflow_fixture(
         f"{sn}-pmeter",
         f"{sn}-eChargeDay",
         f"{sn}-eDischargeDay",
-    }
+    } | _station_unique_ids(MOCK_POWER_STATION_ID)
 
     ent_reg = er.async_get(hass)
     actual_unique_ids = {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -22,6 +23,7 @@ from .const import (
     GOODWE_SPELLING,
     PLATFORMS,
     account_key,
+    coerce_api_int,
     redact_for_log,
 )
 from .sems_api import SemsApi, SemsAuthError, SemsRateLimitedError
@@ -29,6 +31,10 @@ from .sems_api import SemsApi, SemsAuthError, SemsRateLimitedError
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+# Recovered alarms only matter as history, so the list is re-read on this
+# interval rather than every coordinator refresh.
+_ALARM_LIST_REFRESH_SECONDS = 300
 
 _IMMEDIATE_CHARGING_FUNCTION_KEYS = {
     "immediate_charge",
@@ -156,6 +162,9 @@ class SemsData:
     currency: str | None = None
     unavailable_inverter_sources: dict[str, set[str]] = field(default_factory=dict)
     unavailable_homekit_sources: set[str] = field(default_factory=set)
+    station_info: dict[str, Any] | None = None
+    alarm_counts: dict[str, Any] | None = None
+    alarms: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -216,6 +225,8 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
         """Initialize."""
         self.sems_api = sems_api
         self.station_id = entry.data[CONF_STATION_ID]
+        self._alarms: list[dict[str, Any]] = []
+        self._alarms_fetched_at: float | None = None
 
         update_interval = timedelta(
             seconds=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
@@ -362,6 +373,72 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
 
         return immediate_charging
 
+    async def _async_get_station_info(self) -> dict[str, Any] | None:
+        """Fetch station-wide status and on/off-grid state."""
+        try:
+            result = await self.hass.async_add_executor_job(
+                self.sems_api.getWebStationBasicInfo, self.station_id
+            )
+        except SemsAuthError, SemsRateLimitedError:
+            raise
+        except Exception as err:
+            # A station-info failure must not take the inverter entities down.
+            _LOGGER.debug("Unable to fetch SEMS station info: %s", err)
+            return None
+        return result or None
+
+    async def _async_get_alarms(
+        self,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        """Fetch alarm counts, and the alarm list only when one is present."""
+        try:
+            counts = await self.hass.async_add_executor_job(
+                self.sems_api.getAlarmStatistics, self.station_id
+            )
+        except SemsAuthError, SemsRateLimitedError:
+            raise
+        except Exception as err:
+            _LOGGER.debug("Unable to fetch SEMS alarm counts: %s", err)
+            return None, []
+
+        if not counts:
+            return None, []
+
+        if not coerce_api_int(counts.get("total")):
+            self._alarms = []
+            self._alarms_fetched_at = None
+            return counts, []
+
+        if not self._alarm_list_is_due(counts):
+            return counts, self._alarms
+
+        try:
+            page = await self.hass.async_add_executor_job(
+                self.sems_api.getAlarmPage, self.station_id
+            )
+        except SemsAuthError, SemsRateLimitedError:
+            raise
+        except Exception as err:
+            _LOGGER.debug("Unable to fetch SEMS alarm list: %s", err)
+            return counts, self._alarms
+
+        rows = page.get("dataList")
+        if not isinstance(rows, list):
+            return counts, self._alarms
+
+        self._alarms = [row for row in rows if isinstance(row, dict)]
+        self._alarms_fetched_at = time.monotonic()
+        return counts, self._alarms
+
+    def _alarm_list_is_due(self, counts: dict[str, Any]) -> bool:
+        """Return whether the alarm list should be re-read this refresh."""
+        if coerce_api_int(counts.get("happened")):
+            # An occurring alarm is worth a request on every refresh.
+            return True
+        if self._alarms_fetched_at is None:
+            return True
+        return time.monotonic() - self._alarms_fetched_at >= _ALARM_LIST_REFRESH_SECONDS
+
     async def _async_update_data(self) -> SemsData:
         """Fetch data from API endpoint.
 
@@ -381,6 +458,8 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
             )
             batteries = await self._async_get_battery_functions(energy_storage_cabinets)
             immediate_charging = await self._async_get_immediate_charging(batteries)
+            station_info = await self._async_get_station_info()
+            alarm_counts, alarms = await self._async_get_alarms()
 
         except SemsAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -527,6 +606,9 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
                 immediate_charging=immediate_charging,
                 unavailable_inverter_sources=unavailable_inverter_sources,
                 unavailable_homekit_sources=raw_homekit_sources,
+                station_info=station_info,
+                alarm_counts=alarm_counts,
+                alarms=alarms,
             )
             _LOGGER.debug(
                 "Resulting data: %s",

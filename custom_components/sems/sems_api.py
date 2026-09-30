@@ -130,6 +130,12 @@ _WEB_TELECOUNTING_ENDPOINT = ApiEndpoint(
     "/sems-plant/api/equipments/{serial_number}/telecounting", "web"
 )
 _WEB_STATION_FLOW_ENDPOINT = ApiEndpoint("/sems-plant/api/stations/flow", "web")
+_WEB_STATION_BASIC_INFO_ENDPOINT = ApiEndpoint(
+    "/sems-plant/api/app/v2/stations/basic/info", "web"
+)
+_ALARM_STATISTICS_ENDPOINT = ApiEndpoint("/sems-alarm/api/alarm/statistics", "web")
+_ALARM_PAGE_ENDPOINT = ApiEndpoint("/sems-alarm/api/v2/alarm/page", "web")
+_ALARM_PAGE_SIZE = 20
 _WEB_STATION_LIST_ENDPOINT = ApiEndpoint("/sems-plant/api/portal/stations/page", "web")
 _WEB_STATION_STATISTICS_ENDPOINT = ApiEndpoint(
     "/sems-plant/api/stations/statistics", "web"
@@ -1489,6 +1495,68 @@ class SemsApi:
             operation_name="getWebStationFlow API call",
             is_web=True,
             token_type=_WEB_STATION_FLOW_ENDPOINT.token_type,
+        )
+        return result if isinstance(result, dict) else {}
+
+    def getWebStationBasicInfo(
+        self,
+        powerStationId: str,
+        renewToken: bool = False,
+        maxTokenRetries: int = 2,
+    ) -> dict[str, Any]:
+        """Get station-wide info, including status and on/off-grid state."""
+        result = self._make_api_call(
+            f"{_WEB_STATION_BASIC_INFO_ENDPOINT.url_part}?stationId={powerStationId}",
+            data="{}",
+            renewToken=renewToken,
+            maxTokenRetries=maxTokenRetries,
+            operation_name="getWebStationBasicInfo API call",
+            is_web=True,
+            token_type=_WEB_STATION_BASIC_INFO_ENDPOINT.token_type,
+        )
+        return result if isinstance(result, dict) else {}
+
+    def getAlarmStatistics(
+        self,
+        powerStationId: str,
+        renewToken: bool = False,
+        maxTokenRetries: int = 2,
+    ) -> dict[str, Any]:
+        """Get the alarm counts for a station."""
+        result = self._make_api_call(
+            _ALARM_STATISTICS_ENDPOINT.url_part,
+            data=json.dumps({"stationIds": [powerStationId]}),
+            renewToken=renewToken,
+            maxTokenRetries=maxTokenRetries,
+            operation_name="getAlarmStatistics API call",
+            is_web=True,
+            token_type=_ALARM_STATISTICS_ENDPOINT.token_type,
+        )
+        return result if isinstance(result, dict) else {}
+
+    def getAlarmPage(
+        self,
+        powerStationId: str,
+        pageIndex: int = 1,
+        pageSize: int = _ALARM_PAGE_SIZE,
+        renewToken: bool = False,
+        maxTokenRetries: int = 2,
+    ) -> dict[str, Any]:
+        """Get one page of alarms for a station, newest first."""
+        result = self._make_api_call(
+            _ALARM_PAGE_ENDPOINT.url_part,
+            data=json.dumps(
+                {
+                    "pageIndex": pageIndex,
+                    "pageSize": pageSize,
+                    "stationIds": [powerStationId],
+                }
+            ),
+            renewToken=renewToken,
+            maxTokenRetries=maxTokenRetries,
+            operation_name="getAlarmPage API call",
+            is_web=True,
+            token_type=_ALARM_PAGE_ENDPOINT.token_type,
         )
         return result if isinstance(result, dict) else {}
 

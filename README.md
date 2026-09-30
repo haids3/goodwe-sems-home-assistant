@@ -56,6 +56,32 @@ waiting, offline, or not producing. SEMS+ may omit live telemetry in that
 state while still returning historical energy counters. The integration does
 not replace missing values with zero.
 
+### Station status, grid connection and alarms
+
+Alongside the per-inverter entities, each station gets its own device holding
+station-wide entities:
+
+| Entity | Type | Description |
+|---|---|---|
+| Status | sensor | Station status: `Running`, `Offline`, `Fault`, `Waiting`, `Constructing` or `Unknown`. |
+| Online | binary_sensor | `connectivity` class; off only when SEMS reports the station as offline. |
+| On Grid | binary_sensor | On when the station is grid-connected, off when islanded. |
+| Alarm | binary_sensor | `problem` class; on while at least one alarm is occurring. |
+| Active Alarms | sensor | Count of occurring alarms, with the alarm list in its attributes. |
+
+**On Grid** is only created for stations that report a grid status. Battery and
+all-in-one systems do so; PV-only stations omit the field, because islanding
+does not apply to them.
+
+The **Active Alarms** attributes carry `total` and `recovered` counts plus an
+`alarms` list, each entry holding the alarm name, code, device, severity
+(`alarm` or `fault`), status, timestamps and duration. Alarm names are taken
+from the English name supplied by SEMS.
+
+While no alarm is occurring, the alarm list is re-read every five minutes
+rather than on every update, so a station with only historical alarms does not
+add a request to each refresh. An occurring alarm is re-read every refresh.
+
 ### Optional: control the inverter power output via the "Inverter Control" switch
 
 It is possible to temporarily pause and resume energy production using the

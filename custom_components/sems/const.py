@@ -11,7 +11,7 @@ from typing import Any
 
 DOMAIN = "sems"
 
-PLATFORMS = ["number", "sensor", "switch"]
+PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
 
 CONF_STATION_ID = "powerstation_id"
 
@@ -40,6 +40,48 @@ GRID_STATUS_LABELS = {-1: "Offline", 0: "Waiting", 1: "Normal", 2: "Fault"}
 INVERTER_ON_STATUSES = frozenset(
     status for status, label in STATUS_LABELS.items() if label == "Normal"
 )
+
+
+# Station-wide status from app/v2/stations/basic/info. This is a different scale
+# from STATUS_LABELS, which describes a single inverter.
+STATION_STATUS_LABELS = {
+    0: "Offline",
+    1: "Running",
+    2: "Fault",
+    3: "Waiting",
+    11: "Constructing",
+}
+STATION_STATUS_UNKNOWN = "Unknown"
+
+# basic/info gridStatus. Unrelated to GRID_STATUS_LABELS, which encodes the
+# import/export sign of the HomeKit power flow.
+STATION_ON_GRID = 1
+STATION_OFF_GRID = 0
+
+# Alarm severity arrives as "Total_FaultLevel_alarm"/"Total_FaultLevel_Fault".
+ALARM_LEVEL_PREFIX = "Total_FaultLevel_"
+
+# AlarmStatusEnum from the SEMS+ app.
+ALARM_STATUS_LABELS = {
+    0: "occurring",
+    1: "recovered",
+}
+
+
+def coerce_api_int(value: Any) -> int | None:
+    """Return a SEMS enum value as an int.
+
+    SEMS returns these enums as strings ("1"), so callers cannot index the
+    label maps directly.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
 
 
 class GOODWE_SPELLING:

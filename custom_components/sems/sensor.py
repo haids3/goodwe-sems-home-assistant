@@ -39,13 +39,19 @@ from .const import (
     AC_CURRENT_EMPTY,
     AC_EMPTY,
     AC_FEQ_EMPTY,
+    ALARM_LEVEL_PREFIX,
+    ALARM_STATUS_LABELS,
+    CONF_STATION_ID,
     DOMAIN,
     GOODWE_SPELLING,
     GRID_STATUS_LABELS,
+    STATION_STATUS_LABELS,
+    STATION_STATUS_UNKNOWN,
     STATUS_LABELS,
+    coerce_api_int,
     redact_for_log,
 )
-from .device import device_info_for_inverter
+from .device import device_info_for_inverter, device_info_for_station
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -946,6 +952,11 @@ async def async_setup_entry(
                 sensor_option.entity_registry_enabled_default,
             )
         )
+
+    station_id = config_entry.data[CONF_STATION_ID]
+    sensors.append(SemsStationStatusSensor(coordinator, station_id))
+    sensors.append(SemsActiveAlarmsSensor(coordinator, station_id))
+
     async_add_entities(sensors)
 
 
@@ -1263,3 +1274,112 @@ class SemsLegacyPowerflowSensor(SemsHomekitSensor):
             attributes["PowerFlowDirection"] = f"Import {data.get('grid')}"
 
         return attributes
+
+
+def _alarm_level(alarm: dict[str, Any]) -> str | None:
+    """Return the alarm severity without its SEMS enum prefix.
+
+    SEMS sends severities as "Total_FaultLevel_alarm"/"Total_FaultLevel_Fault",
+    whose casing after the prefix is not consistent.
+    """
+    level = alarm.get("alarmLevel")
+    if not isinstance(level, str) or not level:
+        return None
+    return level.removeprefix(ALARM_LEVEL_PREFIX).lower() or None
+
+
+def _alarm_summary(alarm: dict[str, Any]) -> dict[str, Any]:
+    """Summarize one alarm row for the attribute payload.
+
+    `warningname`, `cause` and `solution` are translation keys rather than text,
+    so the English name is taken from `warningNameEn`.
+    """
+    return {
+        "id": alarm.get("warningid"),
+        "name": alarm.get("warningNameEn") or alarm.get("warningname"),
+        "code": alarm.get("warning_code"),
+        "device": alarm.get("deviceName") or alarm.get("devicesn"),
+        "station": alarm.get("stationname") or alarm.get("warningStationName"),
+        "level": _alarm_level(alarm),
+        "status": ALARM_STATUS_LABELS.get(coerce_api_int(alarm.get("status"))),
+        "happened": alarm.get("happentimes"),
+        "recovered": alarm.get("recoverytimes"),
+        "duration": alarm.get("duration"),
+        "confirmed": alarm.get("confirmed"),
+    }
+
+
+class SemsStationSensorBase(CoordinatorEntity[SemsCoordinator], SensorEntity):
+    """Base for sensors describing the station as a whole."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SemsCoordinator,
+        station_id: str,
+        key: str,
+        name: str,
+    ) -> None:
+        """Initialize the station sensor."""
+        super().__init__(coordinator)
+        self._station_id = station_id
+        self._attr_device_info = device_info_for_station(
+            station_id, coordinator.data.station_info
+        )
+        self._attr_unique_id = f"station-{station_id}-{key}"
+        self._attr_name = name
+
+
+class SemsStationStatusSensor(SemsStationSensorBase):
+    """Overall station status reported by SEMS."""
+
+    def __init__(self, coordinator: SemsCoordinator, station_id: str) -> None:
+        """Initialize the station status sensor."""
+        super().__init__(coordinator, station_id, "status", "Status")
+
+    @property
+    def available(self) -> bool:
+        """Return whether station info was included in the last refresh."""
+        return super().available and self.coordinator.data.station_info is not None
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the station status label."""
+        status = coerce_api_int(
+            (self.coordinator.data.station_info or {}).get("status")
+        )
+        if status is None:
+            return None
+        return STATION_STATUS_LABELS.get(status, STATION_STATUS_UNKNOWN)
+
+
+class SemsActiveAlarmsSensor(SemsStationSensorBase):
+    """Number of alarms currently occurring at the station."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: SemsCoordinator, station_id: str) -> None:
+        """Initialize the active alarm count sensor."""
+        super().__init__(coordinator, station_id, "active_alarms", "Active Alarms")
+
+    @property
+    def available(self) -> bool:
+        """Return whether alarm counts were included in the last refresh."""
+        return super().available and self.coordinator.data.alarm_counts is not None
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the count of occurring alarms."""
+        counts = self.coordinator.data.alarm_counts or {}
+        return coerce_api_int(counts.get("happened"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the alarm counts and the alarms themselves."""
+        counts = self.coordinator.data.alarm_counts or {}
+        return {
+            "total": coerce_api_int(counts.get("total")),
+            "recovered": coerce_api_int(counts.get("recovery")),
+            "alarms": [_alarm_summary(alarm) for alarm in self.coordinator.data.alarms],
+        }
