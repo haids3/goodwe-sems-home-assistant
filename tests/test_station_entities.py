@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -383,3 +384,22 @@ async def test_on_grid_not_created_without_grid_status(
     # The rest of the station entities are unaffected.
     assert _entity_id(hass, Platform.BINARY_SENSOR, "online") is not None
     assert _entity_id(hass, Platform.SENSOR, "status") is not None
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_inverter_device_nests_under_station(hass: HomeAssistant) -> None:
+    """The inverter device is a child of the station device, not a peer."""
+    with _mock_api(station_info=MOCK_STATION_INFO):
+        entry = await _setup(hass)
+
+    dev_reg = dr.async_get(hass)
+    station = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, f"station-{MOCK_POWER_STATION_ID}"), entry.entry_id
+    )
+    inverter = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, MOCK_INVERTER_SN), entry.entry_id
+    )
+
+    assert station is not None
+    assert inverter is not None
+    assert inverter.via_device_id == station.id

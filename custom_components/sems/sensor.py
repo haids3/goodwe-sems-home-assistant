@@ -179,7 +179,9 @@ def get_has_existing_homekit_entity(
 
 
 def sensor_options_for_data(
-    data: SemsData, has_existing_homekit_entity: bool = False
+    data: SemsData,
+    has_existing_homekit_entity: bool = False,
+    station_device_id: str | None = None,
 ) -> list[SemsSensorType]:
     """Build a list of sensor definitions for the given coordinator data."""
 
@@ -190,7 +192,9 @@ def sensor_options_for_data(
     for serial_number, inverter_data in data.inverters.items():
         path_to_inverter: SemsValuePath = [serial_number]
 
-        device_info = device_info_for_inverter(serial_number, inverter_data)
+        device_info = device_info_for_inverter(
+            serial_number, inverter_data, station_device_id
+        )
         sensors += [
             SemsInverterSensorType(
                 device_info,
@@ -924,7 +928,7 @@ async def async_setup_entry(
     )
 
     sensor_options: list[SemsSensorType] = sensor_options_for_data(
-        coordinator.data, has_existing_homekit_entity
+        coordinator.data, has_existing_homekit_entity, coordinator.station_device_id
     )
     sensors = []
     for sensor_option in sensor_options:

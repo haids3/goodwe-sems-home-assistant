@@ -13,6 +13,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -26,6 +27,7 @@ from .const import (
     coerce_api_int,
     redact_for_log,
 )
+from .device import device_info_for_station
 from .sems_api import SemsApi, SemsAuthError, SemsRateLimitedError
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
@@ -180,6 +182,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SemsConfigEntry) -> bool
 
     try:
         await coordinator.async_config_entry_first_refresh()
+        # Created before the platforms so inverter devices can reference its id.
+        station_device = dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id,
+            **device_info_for_station(
+                coordinator.station_id, coordinator.data.station_info
+            ),
+        )
+        coordinator.station_device_id = station_device.id
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except BaseException:
         # A failed setup is not unloaded, so release the client here. This
@@ -225,6 +235,7 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
         """Initialize."""
         self.sems_api = sems_api
         self.station_id = entry.data[CONF_STATION_ID]
+        self.station_device_id: str | None = None
         self._alarms: list[dict[str, Any]] = []
         self._alarms_fetched_at: float | None = None
 

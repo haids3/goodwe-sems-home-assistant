@@ -42,7 +42,9 @@ class SemsSwitchBase(CoordinatorEntity[SemsCoordinator], SwitchEntity):
     ) -> None:
         super().__init__(coordinator)
         inverter_data = coordinator.data.inverters.get(serial_number, {})
-        self._attr_device_info = device_info_for_inverter(serial_number, inverter_data)
+        self._attr_device_info = device_info_for_inverter(
+            serial_number, inverter_data, coordinator.station_device_id
+        )
         self._attr_unique_id = f"{serial_number}-{function_name}"
         self._attr_name = name
         self.serial_number = serial_number
