@@ -55,6 +55,11 @@ _WEB_STATISTICS_RATE_MAP = {
 }
 # SEMS+ Web data requests use GET with stationId/pwId query parameters and the
 # Web token plus X-Signature headers.
+# Stations of one account share a client, and Home Assistant refreshes their
+# coordinators in parallel, which SEMS answers with HTTP 429. Requests through a
+# client are spaced by this much so the bursts flatten instead.
+_MinRequestSpacingSeconds = 0.1
+
 _RequestTimeout = 30  # seconds
 _RateLimitRetryAfterSeconds = 300
 # One client is shared by all stations of an account; keep its load bounded.
@@ -188,6 +193,8 @@ class SemsApi:
         self._auth_rejections = 0
         self._session_failure_logged = False
         self._cooldown_lock = threading.Lock()
+        self._request_lock = threading.Lock()
+        self._last_request_at = 0.0
         self._cooldown_until = 0.0
         self._cooldown_strikes = 0
 
@@ -242,6 +249,7 @@ class SemsApi:
     ) -> dict[str, Any] | None:
         """Make a generic HTTP request with error handling and optional code validation."""
         self._raise_if_cooling_down(operation_name)
+        self._space_requests()
         try:
             _LOGGER.debug("SEMS - Making %s to %s", operation_name, url)
             with self._request_slots:
@@ -401,6 +409,19 @@ class SemsApi:
         if self._cooldown_strikes:
             with self._cooldown_lock:
                 self._cooldown_strikes = 0
+
+    def _space_requests(self) -> None:
+        """Hold back a request so this client never bursts.
+
+        Runs in an executor thread, so sleeping here does not block the event
+        loop. The lock is held across the sleep on purpose: that is what
+        serializes the parallel coordinator refreshes sharing this client.
+        """
+        with self._request_lock:
+            wait = self._last_request_at + _MinRequestSpacingSeconds - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_at = time.monotonic()
 
     def _raise_if_cooling_down(self, operation_name: str) -> None:
         """Skip requests while the client is cooling down."""

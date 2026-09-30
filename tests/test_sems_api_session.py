@@ -19,6 +19,7 @@ from custom_components.sems.sems_api import (
     SemsAuthError,
     SemsAuthExpiredError,
     SemsRateLimitedError,
+    _MinRequestSpacingSeconds,
 )
 
 API_BASE = "https://eu-gateway.example.test/web/sems"
@@ -420,7 +421,9 @@ def test_at_most_two_requests_in_flight() -> None:
         results = _run_parallel(6, lambda: api.getWebStationFlow(MOCK_STATION_ID_1))
 
     assert results == [{}] * 6
-    assert peak == 2
+    # Request spacing means short requests rarely overlap at all, so this is the
+    # concurrency ceiling rather than the expected value.
+    assert peak <= 2
 
 
 # ---------------------------------------------------------------------------
@@ -506,3 +509,26 @@ def test_battery_function_menus_are_cached(requests_mock) -> None:
     assert api.getBatteryGeneralFunctions(MOCK_INVERTER_SN, 1) == menus
     assert api.getBatteryGeneralFunctions(MOCK_INVERTER_SN, 1) == menus
     assert requests_mock.call_count == 1
+
+
+def test_requests_through_one_client_are_spaced() -> None:
+    """Parallel station refreshes sharing a client must not burst."""
+    starts: list[float] = []
+    lock = threading.Lock()
+
+    def send(*args: Any, **kwargs: Any) -> Mock:
+        with lock:
+            starts.append(time.monotonic())
+        response = Mock(status_code=200)
+        response.json.return_value = {"code": "00000", "data": {}}
+        return response
+
+    api = SemsApi(Mock(), MOCK_USERNAME, MOCK_PASSWORD)
+    api._web_token = _web_token("valid-token")
+
+    with patch.object(api._session, "request", side_effect=send):
+        _run_parallel(5, lambda: api.getWebStationFlow(MOCK_STATION_ID_1))
+
+    assert len(starts) == 5
+    gaps = [b - a for a, b in zip(sorted(starts), sorted(starts)[1:], strict=False)]
+    assert all(gap >= _MinRequestSpacingSeconds * 0.9 for gap in gaps), gaps
