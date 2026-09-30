@@ -1329,7 +1329,8 @@ class TestSemsApi:
                         "model_type": "Zolder (grid)",
                     }
                 }
-            ]
+            ],
+            "smart_meters": [],
         }
         mock_telemetry.assert_called_once_with(
             "station", "SN1", False, 2, device_type="INVERTER"

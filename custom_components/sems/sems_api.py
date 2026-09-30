@@ -1364,6 +1364,7 @@ class SemsApi:
             if inverter["invert_full"].get("deviceType") in _WEB_REAL_INVERTER_TYPES
         ]
         result: dict[str, Any] = {"inverter": inverters}
+        result["smart_meters"] = smart_meters
         try:
             flow = self.getWebStationFlow(powerStationId, renewToken, maxTokenRetries)
         except (OutOfRetries, SemsRateLimitedError) as err:

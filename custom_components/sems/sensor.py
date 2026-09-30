@@ -52,7 +52,11 @@ from .const import (
     coerce_api_int,
     redact_for_log,
 )
-from .device import device_info_for_inverter, device_info_for_station
+from .device import (
+    device_info_for_inverter,
+    device_info_for_meter,
+    device_info_for_station,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,6 +159,11 @@ class SemsInverterSensorType(SemsSensorType):
     """SEMS inverter sensor definition."""
 
 
+@dataclass(slots=True)
+class SemsMeterSensorType(SemsSensorType):
+    """SEMS smart-meter sensor definition."""
+
+
 def get_homekit_sn(homekit_data: dict[str, Any] | None) -> str | None:
     """Return the HomeKit serial number from coordinator data, if available."""
 
@@ -191,6 +200,70 @@ def get_has_existing_homekit_entity(
             if entity.unique_id == home_kit_sn:
                 return True
     return False
+
+
+_METER_SENSORS = (
+    (
+        "meter_power",
+        "Smart Meter Power",
+        SensorDeviceClass.POWER,
+        UnitOfPower.WATT,
+    ),
+    (
+        "meter_phase_a_power",
+        "Smart Meter Phase A Power",
+        SensorDeviceClass.POWER,
+        UnitOfPower.KILO_WATT,
+    ),
+    (
+        "meter_phase_b_power",
+        "Smart Meter Phase B Power",
+        SensorDeviceClass.POWER,
+        UnitOfPower.KILO_WATT,
+    ),
+    (
+        "meter_phase_c_power",
+        "Smart Meter Phase C Power",
+        SensorDeviceClass.POWER,
+        UnitOfPower.KILO_WATT,
+    ),
+    (
+        "meter_phase_a_voltage",
+        "Smart Meter Phase A Voltage",
+        SensorDeviceClass.VOLTAGE,
+        UnitOfElectricPotential.VOLT,
+    ),
+    (
+        "meter_phase_b_voltage",
+        "Smart Meter Phase B Voltage",
+        SensorDeviceClass.VOLTAGE,
+        UnitOfElectricPotential.VOLT,
+    ),
+    (
+        "meter_phase_c_voltage",
+        "Smart Meter Phase C Voltage",
+        SensorDeviceClass.VOLTAGE,
+        UnitOfElectricPotential.VOLT,
+    ),
+    (
+        "meter_phase_a_current",
+        "Smart Meter Phase A Current",
+        SensorDeviceClass.CURRENT,
+        UnitOfElectricCurrent.AMPERE,
+    ),
+    (
+        "meter_phase_b_current",
+        "Smart Meter Phase B Current",
+        SensorDeviceClass.CURRENT,
+        UnitOfElectricCurrent.AMPERE,
+    ),
+    (
+        "meter_phase_c_current",
+        "Smart Meter Phase C Current",
+        SensorDeviceClass.CURRENT,
+        UnitOfElectricCurrent.AMPERE,
+    ),
+)
 
 
 def sensor_options_for_data(
@@ -672,81 +745,21 @@ def sensor_options_for_data(
                 SensorStateClass.MEASUREMENT,
             ),
         ]
-        for key, name, device_class, unit in (
-            (
-                "meter_power",
-                "Smart Meter Power",
-                SensorDeviceClass.POWER,
-                UnitOfPower.WATT,
-            ),
-            (
-                "meter_phase_a_power",
-                "Smart Meter Phase A Power",
-                SensorDeviceClass.POWER,
-                UnitOfPower.KILO_WATT,
-            ),
-            (
-                "meter_phase_b_power",
-                "Smart Meter Phase B Power",
-                SensorDeviceClass.POWER,
-                UnitOfPower.KILO_WATT,
-            ),
-            (
-                "meter_phase_c_power",
-                "Smart Meter Phase C Power",
-                SensorDeviceClass.POWER,
-                UnitOfPower.KILO_WATT,
-            ),
-            (
-                "meter_phase_a_voltage",
-                "Smart Meter Phase A Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-            ),
-            (
-                "meter_phase_b_voltage",
-                "Smart Meter Phase B Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-            ),
-            (
-                "meter_phase_c_voltage",
-                "Smart Meter Phase C Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-            ),
-            (
-                "meter_phase_a_current",
-                "Smart Meter Phase A Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-            ),
-            (
-                "meter_phase_b_current",
-                "Smart Meter Phase B Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-            ),
-            (
-                "meter_phase_c_current",
-                "Smart Meter Phase C Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-            ),
-        ):
-            if key in data.homekit:
-                sensors.append(
-                    SemsHomekitSensorType(
-                        device_info,
-                        f"{homekit_sn}-{key}",
-                        [key],
-                        name,
-                        device_class,
-                        unit,
-                        SensorStateClass.MEASUREMENT,
+        if not data.meters:
+            # Legacy payloads merge a single meter's fields into the flow data.
+            for key, name, device_class, unit in _METER_SENSORS:
+                if key in data.homekit:
+                    sensors.append(
+                        SemsHomekitSensorType(
+                            device_info,
+                            f"{homekit_sn}-{key}",
+                            [key],
+                            name,
+                            device_class,
+                            unit,
+                            SensorStateClass.MEASUREMENT,
+                        )
                     )
-                )
-        if data.homekit.get(GOODWE_SPELLING.hasEnergyStatisticsCharts):
             if any(key.startswith("Charts_") for key in data.homekit):
                 sensors += [
                     SemsHomekitSensorType(
@@ -901,6 +914,25 @@ def sensor_options_for_data(
                         custom_value_handler=_percentage_handler,
                     ),
                 ]
+    for meter_sn, meter_data in data.meters.items():
+        meter_device_info = device_info_for_meter(
+            meter_sn, meter_data, station_device_id
+        )
+        for key, name, device_class, unit in _METER_SENSORS:
+            if key not in meter_data:
+                continue
+            sensors.append(
+                SemsMeterSensorType(
+                    meter_device_info,
+                    f"{meter_sn}-{key}",
+                    [meter_sn, key],
+                    name,
+                    device_class,
+                    unit,
+                    SensorStateClass.MEASUREMENT,
+                )
+            )
+
     return sensors
 
 
@@ -943,7 +975,9 @@ async def async_setup_entry(
     sensors = []
     for sensor_option in sensor_options:
         sensor_class: type[SemsSensor]
-        if isinstance(sensor_option, SemsLegacyPowerflowSensorType):
+        if isinstance(sensor_option, SemsMeterSensorType):
+            sensor_class = SemsMeterSensor
+        elif isinstance(sensor_option, SemsLegacyPowerflowSensorType):
             sensor_class = SemsLegacyPowerflowSensor
         elif isinstance(sensor_option, SemsHomekitSensorType):
             sensor_class = SemsHomekitSensor
@@ -1197,6 +1231,15 @@ class SemsInverterSensor(SemsSensor):
                 attributes["statusText"] = "Unknown"
 
         return attributes
+
+
+class SemsMeterSensor(SemsSensor):
+    """Sensor that reads from a single smart meter."""
+
+    def _get_data_dict(self) -> dict[str, Any] | None:
+        """Return the meters keyed by serial number."""
+
+        return self.coordinator.data.meters
 
 
 class SemsHomekitSensor(SemsSensor):

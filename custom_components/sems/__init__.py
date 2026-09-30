@@ -169,6 +169,7 @@ class SemsData:
     station_info: dict[str, Any] | None = None
     alarm_counts: dict[str, Any] | None = None
     alarms: list[dict[str, Any]] = field(default_factory=list)
+    meters: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -611,9 +612,16 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
 
                 homekit = powerflow
 
+            meters_by_sn: dict[str, dict[str, Any]] = {
+                meter["sn"]: meter
+                for meter in data_result.get("smart_meters") or []
+                if isinstance(meter, dict) and isinstance(meter.get("sn"), str)
+            }
+
             data = SemsData(
                 inverters=inverters_by_sn,
                 station_id=self.station_id,
+                meters=meters_by_sn,
                 batteries=batteries,
                 homekit=homekit,
                 currency=currency,

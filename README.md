@@ -88,6 +88,10 @@ Device-specific readings stay on their own device, and each device is named for
 what it actually is: an `All-in-One 1`, `Battery Rack 4` or `Dongle 1` is no
 longer labelled as an inverter.
 
+Each smart meter is its own device too, keyed by its own serial, so a station
+with more than one meter reports each separately. Previously only the first
+meter of a station was read.
+
 Upgrading from a version before this change moves the station-level power-flow
 sensors off the old shared `HomeKit` device and onto the station. Their entity
 IDs and history are preserved, so they keep their original `homekit_` names.

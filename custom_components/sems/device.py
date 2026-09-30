@@ -19,10 +19,11 @@ _DEVICE_TYPE_LABELS = {
     "ENERGY_STORAGE_INTEGRATED_CABINET": "All-in-One",
     "BATTERY_RACK": "Battery Rack",
     "DONGLE": "Dongle",
+    "SMART_METER": "Smart Meter",
 }
 
 
-def device_name_for_inverter(serial_number: str, inverter_data: dict[str, Any]) -> str:
+def device_display_name(serial_number: str, inverter_data: dict[str, Any]) -> str:
     """Return a display name that matches what the device actually is."""
     name = str(inverter_data.get("name") or serial_number)
 
@@ -65,7 +66,7 @@ def device_info_for_inverter(
     # is guaranteed to contain `model_type`, `firmwareversion`, etc.
     device_info = DeviceInfo(
         identifiers={(DOMAIN, serial_number)},
-        name=device_name_for_inverter(serial_number, inverter_data),
+        name=device_display_name(serial_number, inverter_data),
         manufacturer="GoodWe",
         model=inverter_data.get("model_type", "unknown"),
         sw_version=sw_version,
@@ -77,13 +78,45 @@ def device_info_for_inverter(
         ),
     )
 
-    # Nest the inverter under its station so a single-inverter system does not
-    # show two unrelated top-level devices.
+    _set_parent_station(device_info, inverter_data, station_device_id)
+
+    return device_info
+
+
+def _set_parent_station(
+    device_info: DeviceInfo,
+    device_data: dict[str, Any],
+    station_device_id: str | None,
+) -> None:
+    """Nest a device under its station.
+
+    Without this a single-inverter system shows two unrelated top-level devices.
+    """
     if _SUPPORTS_VIA_DEVICE_ID:
         if station_device_id:
             device_info["via_device_id"] = station_device_id
-    elif station_id := inverter_data.get("powerstation_id"):
+    elif station_id := device_data.get("powerstation_id"):
         device_info["via_device"] = station_identifier(station_id)
+
+
+def device_info_for_meter(
+    serial_number: str,
+    meter_data: dict[str, Any],
+    station_device_id: str | None = None,
+) -> DeviceInfo:
+    """Build device info for a smart meter.
+
+    Meters are separate devices, and a station can have more than one, so each is
+    keyed by its own serial rather than folded into the station.
+    """
+    device_info = DeviceInfo(
+        identifiers={(DOMAIN, serial_number)},
+        name=device_display_name(serial_number, meter_data),
+        manufacturer="GoodWe",
+        model=meter_data.get("model_type") or meter_data.get("subtype") or "unknown",
+    )
+
+    _set_parent_station(device_info, meter_data, station_device_id)
 
     return device_info
 
