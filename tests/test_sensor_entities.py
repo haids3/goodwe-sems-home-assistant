@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -1272,3 +1274,59 @@ async def test_shared_fallback_entities_are_migrated_to_the_station_namespace(
         )
         is not None
     )
+
+
+async def test_first_refresh_is_serialized_per_account(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Stations of one account must come up one at a time, not in a burst."""
+    del enable_custom_integrations
+
+    in_flight = 0
+    peak = 0
+    counter_lock = threading.Lock()
+
+    def get_data(station_id: str) -> dict:
+        nonlocal in_flight, peak
+        with counter_lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        time.sleep(0.05)
+        with counter_lock:
+            in_flight -= 1
+        data = _build_homekit_test_data()
+        inverter = data["inverter"][0]["invert_full"]
+        inverter["sn"] = f"GW0000SN{station_id[:8].upper()}"
+        inverter["powerstation_id"] = station_id
+        return data
+
+    entries = [
+        _add_entry(hass, MOCK_POWER_STATION_ID),
+        _add_entry(hass, MOCK_SECOND_STATION_ID),
+    ]
+
+    with (
+        patch("custom_components.sems.sems_api.SemsApi.getData", side_effect=get_data),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getEnergyStorageIntegratedCabinets",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getWebStationBasicInfo",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmStatistics",
+            return_value={},
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entries[0].entry_id)
+        await hass.async_block_till_done()
+
+    assert [entry.state for entry in entries] == [ConfigEntryState.LOADED] * 2
+    assert peak == 1

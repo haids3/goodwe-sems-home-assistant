@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -87,6 +88,9 @@ class _SharedApi:
 
     api: SemsApi
     entry_ids: set[str]
+    # Held for the duration of an entry's first refresh, so the stations of an
+    # account come up one at a time instead of bursting.
+    setup_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _shared_clients(hass: HomeAssistant) -> dict[str, _SharedApi]:
@@ -94,7 +98,7 @@ def _shared_clients(hass: HomeAssistant) -> dict[str, _SharedApi]:
     return hass.data.setdefault(DOMAIN, {}).setdefault("clients", {})
 
 
-def _acquire_api(hass: HomeAssistant, entry: ConfigEntry) -> SemsApi:
+def _acquire_shared(hass: HomeAssistant, entry: ConfigEntry) -> _SharedApi:
     """Return the account's shared API client, creating it if needed.
 
     SEMS+ keeps one web session per account, so the stations of an account
@@ -112,7 +116,7 @@ def _acquire_api(hass: HomeAssistant, entry: ConfigEntry) -> SemsApi:
         # The most recently set up entry carries the newest password.
         shared.api.update_credentials(entry.data[CONF_PASSWORD])
     shared.entry_ids.add(entry.entry_id)
-    return shared.api
+    return shared
 
 
 async def _async_release_api(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -179,12 +183,17 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: SemsConfigEntry) -> bool:
     """Set up sems from a config entry."""
-    sems_api = _acquire_api(hass, entry)
+    shared = _acquire_shared(hass, entry)
+    sems_api = shared.api
     coordinator = SemsDataUpdateCoordinator(hass, sems_api, entry)
     entry.runtime_data = SemsRuntimeData(api=sems_api, coordinator=coordinator)
 
     try:
-        await coordinator.async_config_entry_first_refresh()
+        # One station at a time: a simultaneous first refresh for every station
+        # of an account is what SEMS answers with HTTP 429. Each coordinator then
+        # schedules its next run from its own finish time, so they stay spread.
+        async with shared.setup_lock:
+            await coordinator.async_config_entry_first_refresh()
         # Created before the platforms so inverter devices can reference its id.
         station_device = dr.async_get(hass).async_get_or_create(
             config_entry_id=entry.entry_id,
