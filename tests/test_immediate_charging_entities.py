@@ -301,3 +301,47 @@ async def test_battery_entities_appear_after_a_throttled_setup(
             ent_reg.async_get_entity_id(Platform.NUMBER, DOMAIN, number_unique_id)
             is not None
         )
+
+
+async def test_no_inverter_switch_for_racks_and_dongles(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Inverter control is meaningless on a battery rack or a dongle."""
+    del enable_custom_integrations
+
+    rack_sn = "5BAEH2C10225CQ0455"
+    dongle_sn = "72101WLA25C01180"
+    get_data = deepcopy(MOCK_GET_DATA_RESULT_MINIMAL)
+    get_data["inverter"][0]["invert_full"]["deviceType"] = "INVERTER"
+    for serial, device_type in ((rack_sn, "BATTERY_RACK"), (dongle_sn, "DONGLE")):
+        get_data["inverter"].append(
+            {
+                "invert_full": {
+                    "sn": serial,
+                    "name": f"{device_type} 1",
+                    "deviceType": device_type,
+                    "powerstation_id": POWER_STATION_ID,
+                    "status": 1,
+                }
+            }
+        )
+
+    await _setup_entry(hass, get_data=get_data)
+
+    ent_reg = er.async_get(hass)
+    assert (
+        ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, f"{rack_sn}-switch")
+        is None
+    )
+    assert (
+        ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, f"{dongle_sn}-switch")
+        is None
+    )
+    # The real inverter still has one.
+    assert (
+        ent_reg.async_get_entity_id(
+            Platform.SWITCH, DOMAIN, f"{INVERTER_SERIAL}-switch"
+        )
+        is not None
+    )

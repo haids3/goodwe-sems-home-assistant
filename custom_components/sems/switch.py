@@ -20,7 +20,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import SemsCoordinator
-from .const import CONF_STATION_ID, INVERTER_ON_STATUSES
+from .const import (
+    CONF_STATION_ID,
+    INVERTER_ON_STATUSES,
+    NON_INVERTER_DEVICE_TYPES,
+)
 from .device import device_info_for_inverter
 
 _LOGGER = logging.getLogger(__name__)
@@ -185,7 +189,10 @@ def _build_switches(
 ) -> list[SwitchEntity]:
     """Build every switch the current coordinator data supports."""
     switch_entities: list[SwitchEntity] = [
-        SemsInverterSwitch(coordinator, sn) for sn in coordinator.data.inverters
+        SemsInverterSwitch(coordinator, sn)
+        for sn, inverter_data in coordinator.data.inverters.items()
+        # Inverter control is meaningless on a battery rack or a dongle.
+        if inverter_data.get("deviceType") not in NON_INVERTER_DEVICE_TYPES
     ]
 
     for sn, bats in (coordinator.data.batteries or {}).items():

@@ -15,6 +15,12 @@ PLATFORMS = ["binary_sensor", "number", "sensor", "switch"]
 
 CONF_STATION_ID = "powerstation_id"
 
+# SEMS reports these through the same device list as inverters, but a battery
+# rack only reports its own telemetry and charge counters and a dongle reports
+# nothing but its status. Applying the inverter template to them created dozens
+# of entities per device that never receive data.
+NON_INVERTER_DEVICE_TYPES = frozenset({"BATTERY_RACK", "DONGLE"})
+
 # GoodWe "Power Meter" installations report no serial. This constant stood in for
 # one, which made every meter-less station of an account share a unique-ID
 # namespace; it is now only a sentinel, normalised per station in the sensor

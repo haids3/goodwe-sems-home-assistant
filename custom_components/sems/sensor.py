@@ -46,6 +46,7 @@ from .const import (
     GOODWE_SPELLING,
     GRID_STATUS_LABELS,
     HOMEKIT_NO_SERIAL,
+    NON_INVERTER_DEVICE_TYPES,
     STATION_STATUS_LABELS,
     STATION_STATUS_UNKNOWN,
     STATUS_LABELS,
@@ -266,6 +267,225 @@ _METER_SENSORS = (
 )
 
 
+def _inverter_sensors(
+    device_info: DeviceInfo,
+    serial_number: str,
+    path_to_inverter: SemsValuePath,
+    currency: str | None,
+) -> list[SemsSensorType]:
+    """Build the sensors that only a real inverter reports."""
+    sensors: list[SemsSensorType] = []
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-capacity",
+            [*path_to_inverter, "capacity"],
+            "Capacity",
+            SensorDeviceClass.POWER,
+            UnitOfPower.KILO_WATT,
+            SensorStateClass.MEASUREMENT,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-power",
+            # "Power",
+            [*path_to_inverter, "pac"],
+            device_class=SensorDeviceClass.POWER,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            state_class=SensorStateClass.MEASUREMENT,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-energy",
+            [*path_to_inverter, "etotal"],
+            device_class=SensorDeviceClass.ENERGY,
+            native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-hour-total",
+            [*path_to_inverter, "hour_total"],
+            "Total Hours",
+            native_unit_of_measurement=UnitOfTime.HOURS,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-temperature",
+            [*path_to_inverter, GOODWE_SPELLING.temperature],
+            device_class=SensorDeviceClass.TEMPERATURE,
+            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+            state_class=SensorStateClass.MEASUREMENT,
+            empty_value=0,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-eday",
+            [*path_to_inverter, "eday"],
+            "Energy Today",
+            SensorDeviceClass.ENERGY,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-{GOODWE_SPELLING.thisMonthTotalE}",
+            [*path_to_inverter, GOODWE_SPELLING.thisMonthTotalE],
+            "Energy This Month",
+            SensorDeviceClass.ENERGY,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-eweek",
+            [*path_to_inverter, "eweek"],
+            "Energy This Week",
+            SensorDeviceClass.ENERGY,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-eyear",
+            [*path_to_inverter, "eyear"],
+            "Energy This Year",
+            SensorDeviceClass.ENERGY,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorStateClass.TOTAL_INCREASING,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-{GOODWE_SPELLING.lastMonthTotalE}",
+            [*path_to_inverter, GOODWE_SPELLING.lastMonthTotalE],
+            "Energy Last Month",
+            SensorDeviceClass.ENERGY,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            SensorStateClass.TOTAL_INCREASING,
+            entity_registry_enabled_default=False,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-iday",
+            [*path_to_inverter, "iday"],
+            "Income Today",
+            SensorDeviceClass.MONETARY,
+            currency,
+            SensorStateClass.TOTAL,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-itotal",
+            [*path_to_inverter, "itotal"],
+            "Income Total",
+            SensorDeviceClass.MONETARY,
+            currency,
+            SensorStateClass.TOTAL,
+        ),
+    ]
+    # Multiple strings
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-vpv{idx}",
+            [*path_to_inverter, f"vpv{idx}"],
+            f"PV String {idx} Voltage",
+            SensorDeviceClass.VOLTAGE,
+            UnitOfElectricPotential.VOLT,
+            SensorStateClass.MEASUREMENT,
+            0,
+        )
+        for idx in range(1, 5)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-ipv{idx}",
+            [*path_to_inverter, f"ipv{idx}"],
+            f"PV String {idx} Current",
+            SensorDeviceClass.CURRENT,
+            UnitOfElectricCurrent.AMPERE,
+            SensorStateClass.MEASUREMENT,
+            0,
+        )
+        for idx in range(1, 5)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-ppv{idx}",
+            [*path_to_inverter, f"ppv{idx}"],
+            f"PV String {idx} Power",
+            SensorDeviceClass.POWER,
+            UnitOfPower.WATT,
+            SensorStateClass.MEASUREMENT,
+            0,
+        )
+        for idx in range(1, 5)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-vac{idx}",
+            [*path_to_inverter, f"vac{idx}"],
+            f"Grid {idx} AC Voltage",
+            SensorDeviceClass.VOLTAGE,
+            UnitOfElectricPotential.VOLT,
+            SensorStateClass.MEASUREMENT,
+            AC_EMPTY,
+        )
+        for idx in range(1, 4)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-iac{idx}",
+            [*path_to_inverter, f"iac{idx}"],
+            f"Grid {idx} AC Current",
+            SensorDeviceClass.CURRENT,
+            UnitOfElectricCurrent.AMPERE,
+            SensorStateClass.MEASUREMENT,
+            AC_CURRENT_EMPTY,
+        )
+        for idx in range(1, 4)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-fac{idx}",
+            [*path_to_inverter, f"fac{idx}"],
+            f"Grid {idx} AC Frequency",
+            SensorDeviceClass.FREQUENCY,
+            UnitOfFrequency.HERTZ,
+            SensorStateClass.MEASUREMENT,
+            AC_FEQ_EMPTY,
+        )
+        for idx in range(1, 4)
+    ]
+    sensors += [
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-vbattery1",
+            [*path_to_inverter, "vbattery1"],
+            "Battery Voltage",
+            SensorDeviceClass.VOLTAGE,
+            UnitOfElectricPotential.VOLT,
+            SensorStateClass.MEASUREMENT,
+        ),
+        SemsInverterSensorType(
+            device_info,
+            f"{serial_number}-ibattery1",
+            [*path_to_inverter, "ibattery1"],
+            "Battery Current",
+            SensorDeviceClass.CURRENT,
+            UnitOfElectricCurrent.AMPERE,
+            SensorStateClass.MEASUREMENT,
+        ),
+    ]
+    return sensors
+
+
 def sensor_options_for_data(
     data: SemsData,
     has_existing_homekit_entity: bool = False,
@@ -283,221 +503,19 @@ def sensor_options_for_data(
         device_info = device_info_for_inverter(
             serial_number, inverter_data, station_device_id
         )
-        sensors += [
+        sensors.append(
             SemsInverterSensorType(
                 device_info,
                 f"{serial_number}-status",
                 [*path_to_inverter, "status"],
                 "Status",
                 data_type_converter=convert_status_to_label,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-capacity",
-                [*path_to_inverter, "capacity"],
-                "Capacity",
-                SensorDeviceClass.POWER,
-                UnitOfPower.KILO_WATT,
-                SensorStateClass.MEASUREMENT,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-power",
-                # "Power",
-                [*path_to_inverter, "pac"],
-                device_class=SensorDeviceClass.POWER,
-                native_unit_of_measurement=UnitOfPower.WATT,
-                state_class=SensorStateClass.MEASUREMENT,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-energy",
-                [*path_to_inverter, "etotal"],
-                device_class=SensorDeviceClass.ENERGY,
-                native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-                state_class=SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-hour-total",
-                [*path_to_inverter, "hour_total"],
-                "Total Hours",
-                native_unit_of_measurement=UnitOfTime.HOURS,
-                state_class=SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-temperature",
-                [*path_to_inverter, GOODWE_SPELLING.temperature],
-                device_class=SensorDeviceClass.TEMPERATURE,
-                native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-                state_class=SensorStateClass.MEASUREMENT,
-                empty_value=0,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-eday",
-                [*path_to_inverter, "eday"],
-                "Energy Today",
-                SensorDeviceClass.ENERGY,
-                UnitOfEnergy.KILO_WATT_HOUR,
-                SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-{GOODWE_SPELLING.thisMonthTotalE}",
-                [*path_to_inverter, GOODWE_SPELLING.thisMonthTotalE],
-                "Energy This Month",
-                SensorDeviceClass.ENERGY,
-                UnitOfEnergy.KILO_WATT_HOUR,
-                SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-eweek",
-                [*path_to_inverter, "eweek"],
-                "Energy This Week",
-                SensorDeviceClass.ENERGY,
-                UnitOfEnergy.KILO_WATT_HOUR,
-                SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-eyear",
-                [*path_to_inverter, "eyear"],
-                "Energy This Year",
-                SensorDeviceClass.ENERGY,
-                UnitOfEnergy.KILO_WATT_HOUR,
-                SensorStateClass.TOTAL_INCREASING,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-{GOODWE_SPELLING.lastMonthTotalE}",
-                [*path_to_inverter, GOODWE_SPELLING.lastMonthTotalE],
-                "Energy Last Month",
-                SensorDeviceClass.ENERGY,
-                UnitOfEnergy.KILO_WATT_HOUR,
-                SensorStateClass.TOTAL_INCREASING,
-                entity_registry_enabled_default=False,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-iday",
-                [*path_to_inverter, "iday"],
-                "Income Today",
-                SensorDeviceClass.MONETARY,
-                currency,
-                SensorStateClass.TOTAL,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-itotal",
-                [*path_to_inverter, "itotal"],
-                "Income Total",
-                SensorDeviceClass.MONETARY,
-                currency,
-                SensorStateClass.TOTAL,
-            ),
-        ]
-        # Multiple strings
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-vpv{idx}",
-                [*path_to_inverter, f"vpv{idx}"],
-                f"PV String {idx} Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-                SensorStateClass.MEASUREMENT,
-                0,
             )
-            for idx in range(1, 5)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-ipv{idx}",
-                [*path_to_inverter, f"ipv{idx}"],
-                f"PV String {idx} Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-                SensorStateClass.MEASUREMENT,
-                0,
+        )
+        if inverter_data.get("deviceType") not in NON_INVERTER_DEVICE_TYPES:
+            sensors += _inverter_sensors(
+                device_info, serial_number, path_to_inverter, currency
             )
-            for idx in range(1, 5)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-ppv{idx}",
-                [*path_to_inverter, f"ppv{idx}"],
-                f"PV String {idx} Power",
-                SensorDeviceClass.POWER,
-                UnitOfPower.WATT,
-                SensorStateClass.MEASUREMENT,
-                0,
-            )
-            for idx in range(1, 5)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-vac{idx}",
-                [*path_to_inverter, f"vac{idx}"],
-                f"Grid {idx} AC Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-                SensorStateClass.MEASUREMENT,
-                AC_EMPTY,
-            )
-            for idx in range(1, 4)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-iac{idx}",
-                [*path_to_inverter, f"iac{idx}"],
-                f"Grid {idx} AC Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-                SensorStateClass.MEASUREMENT,
-                AC_CURRENT_EMPTY,
-            )
-            for idx in range(1, 4)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-fac{idx}",
-                [*path_to_inverter, f"fac{idx}"],
-                f"Grid {idx} AC Frequency",
-                SensorDeviceClass.FREQUENCY,
-                UnitOfFrequency.HERTZ,
-                SensorStateClass.MEASUREMENT,
-                AC_FEQ_EMPTY,
-            )
-            for idx in range(1, 4)
-        ]
-        sensors += [
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-vbattery1",
-                [*path_to_inverter, "vbattery1"],
-                "Battery Voltage",
-                SensorDeviceClass.VOLTAGE,
-                UnitOfElectricPotential.VOLT,
-                SensorStateClass.MEASUREMENT,
-            ),
-            SemsInverterSensorType(
-                device_info,
-                f"{serial_number}-ibattery1",
-                [*path_to_inverter, "ibattery1"],
-                "Battery Current",
-                SensorDeviceClass.CURRENT,
-                UnitOfElectricCurrent.AMPERE,
-                SensorStateClass.MEASUREMENT,
-            ),
-        ]
         battery_count = get_value_from_path(
             data.inverters, [*path_to_inverter, "battery_count"]
         )
@@ -627,6 +645,26 @@ def sensor_options_for_data(
                     UnitOfEnergy.KILO_WATT_HOUR,
                     SensorStateClass.TOTAL_INCREASING,
                 ),
+            )
+        for counter, name in (
+            ("echarge_total", "Battery Charge Total"),
+            ("edischarge_total", "Battery Discharge Total"),
+        ):
+            if (
+                get_value_from_path(data.inverters, [*path_to_inverter, counter])
+                is None
+            ):
+                continue
+            sensors.append(
+                SemsInverterSensorType(
+                    device_info,
+                    f"{serial_number}-{counter}",
+                    [*path_to_inverter, counter],
+                    name,
+                    SensorDeviceClass.ENERGY,
+                    UnitOfEnergy.KILO_WATT_HOUR,
+                    SensorStateClass.TOTAL_INCREASING,
+                )
             )
         _LOGGER.debug(
             "Sensors for inverter %s: %s",

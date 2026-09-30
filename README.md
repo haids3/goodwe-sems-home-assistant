@@ -92,6 +92,18 @@ Each smart meter is its own device too, keyed by its own serial, so a station
 with more than one meter reports each separately. Previously only the first
 meter of a station was read.
 
+Devices only get the entities they actually report. A battery rack gets its
+status, its own telemetry (state of charge, state of health, power, voltage,
+current, BMS temperature and current limits) and its charge counters, including
+lifetime charge and discharge totals. A dongle reports nothing but its status.
+Neither gets an inverter-control switch. Earlier versions applied the full
+inverter template to every device SEMS listed, which left around forty disabled
+entities on each battery rack and dongle.
+
+Entities that a previous version created are not removed automatically, since an
+absent value can also mean a request was rate limited. Deleting and re-adding
+the integration entry clears the leftovers.
+
 Entities are added as soon as SEMS reports the data behind them, not only
 during setup, so a station whose requests were rate limited while starting up
 gains its missing entities on a later refresh instead of needing a reload. The

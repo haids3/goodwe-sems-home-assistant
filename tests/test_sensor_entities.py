@@ -1382,3 +1382,95 @@ async def test_flow_sensors_appear_after_a_throttled_setup(
         assert (
             ent_reg.async_get_entity_id(Platform.SENSOR, DOMAIN, unique_id) is not None
         )
+
+
+def _device_data(serial: str, device_type: str, **extra: object) -> dict:
+    """Build one device entry as the coordinator stores it."""
+    return {
+        "sn": serial,
+        "name": f"{device_type} 1",
+        "deviceType": device_type,
+        "powerstation_id": MOCK_POWER_STATION_ID,
+        "status": 1,
+        **extra,
+    }
+
+
+def test_battery_rack_only_gets_battery_sensors() -> None:
+    """A rack reports status, its own telemetry and charge counters, nothing else."""
+    rack_sn = "5BAEH2C10225CQ0455"
+    data = SemsData(
+        station_id=MOCK_POWER_STATION_ID,
+        inverters={
+            rack_sn: _device_data(
+                rack_sn,
+                "BATTERY_RACK",
+                battery_count=1,
+                more_batterys=[{"soc": 82.3, "soh": 100.0, "pbattery": -2236.0}],
+                eChargeDay=1.2,
+                eDischargeDay=0.8,
+                echarge_total=933.8,
+                edischarge_total=885.8,
+            )
+        },
+    )
+
+    keys = {
+        option.unique_id.removeprefix(f"{rack_sn}-")
+        for option in sensor_options_for_data(data)
+    }
+
+    assert keys == {
+        "status",
+        "0-soc",
+        "0-soh",
+        "0-pbattery",
+        "0-vbattery",
+        "0-ibattery",
+        "0-bms_temperature",
+        "0-bms_charge_i_max",
+        "0-bms_discharge_i_max",
+        "eChargeDay",
+        "eDischargeDay",
+        "echarge_total",
+        "edischarge_total",
+    }
+    # The inverter template must not follow a battery rack around.
+    assert not {
+        key
+        for key in keys
+        if key.startswith(("vpv", "ipv", "ppv", "vac", "iac", "fac"))
+    }
+    assert "capacity" not in keys
+    assert "power" not in keys
+
+
+def test_dongle_only_gets_status() -> None:
+    """A dongle reports nothing but its status."""
+    dongle_sn = "72101WLA25C01180"
+    data = SemsData(
+        station_id=MOCK_POWER_STATION_ID,
+        inverters={dongle_sn: _device_data(dongle_sn, "DONGLE")},
+    )
+
+    options = sensor_options_for_data(data)
+
+    assert [option.unique_id for option in options] == [f"{dongle_sn}-status"]
+
+
+def test_real_inverter_keeps_the_full_template() -> None:
+    """Gating must not strip an actual inverter."""
+    inverter_sn = "GW0000SN000TEST1"
+    data = SemsData(
+        station_id=MOCK_POWER_STATION_ID,
+        inverters={
+            inverter_sn: _device_data(inverter_sn, "INVERTER", capacity=3.0, pac=589)
+        },
+    )
+
+    keys = {
+        option.unique_id.removeprefix(f"{inverter_sn}-")
+        for option in sensor_options_for_data(data)
+    }
+
+    assert {"status", "capacity", "power", "vpv1", "vac1", "fac1"} <= keys
