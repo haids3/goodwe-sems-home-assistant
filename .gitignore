@@ -12,3 +12,11 @@ coverage.xml
 .mypy_cache
 .ruff_cache
 .ha-core
+
+# Decompiled SEMS+ app artifacts: too large for GitHub and not ours to ship.
+# See docs/sems-plus-api-notes.md for how to regenerate them.
+decompiled.js
+decompiled.zip
+strings.txt
+hermes_out/
+sems-plus-app-decompile/
