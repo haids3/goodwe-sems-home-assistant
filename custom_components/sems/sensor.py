@@ -28,7 +28,7 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -969,10 +969,48 @@ async def async_setup_entry(
         coordinator.data.homekit, hass, config_entry
     )
 
-    sensor_options: list[SemsSensorType] = sensor_options_for_data(
-        coordinator.data, has_existing_homekit_entity, coordinator.station_device_id
+    station_id = config_entry.data[CONF_STATION_ID]
+    async_add_entities(
+        [
+            SemsStationStatusSensor(coordinator, station_id),
+            SemsActiveAlarmsSensor(coordinator, station_id),
+        ]
     )
-    sensors = []
+
+    known_unique_ids: set[str] = set()
+
+    @callback
+    def async_add_new_sensors() -> None:
+        """Add sensors for data that was not in the coordinator payload yet.
+
+        Sensors are derived from whatever the last refresh returned, so a request
+        that failed or was rate limited during setup would otherwise leave its
+        entities missing until the entry was reloaded.
+        """
+        new_options = [
+            option
+            for option in sensor_options_for_data(
+                coordinator.data,
+                has_existing_homekit_entity,
+                coordinator.station_device_id,
+            )
+            if option.unique_id not in known_unique_ids
+        ]
+        if not new_options:
+            return
+
+        known_unique_ids.update(option.unique_id for option in new_options)
+        async_add_entities(_build_sensors(coordinator, new_options))
+
+    async_add_new_sensors()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_sensors))
+
+
+def _build_sensors(
+    coordinator: SemsCoordinator, sensor_options: list[SemsSensorType]
+) -> list[SemsSensor]:
+    """Build sensor entities for the given definitions."""
+    sensors: list[SemsSensor] = []
     for sensor_option in sensor_options:
         sensor_class: type[SemsSensor]
         if isinstance(sensor_option, SemsMeterSensorType):
@@ -1000,12 +1038,7 @@ async def async_setup_entry(
                 sensor_option.entity_registry_enabled_default,
             )
         )
-
-    station_id = config_entry.data[CONF_STATION_ID]
-    sensors.append(SemsStationStatusSensor(coordinator, station_id))
-    sensors.append(SemsActiveAlarmsSensor(coordinator, station_id))
-
-    async_add_entities(sensors)
+    return sensors
 
 
 def _migrate_fallback_namespace(

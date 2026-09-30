@@ -13,7 +13,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -40,17 +40,34 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data.coordinator
     station_id = config_entry.data[CONF_STATION_ID]
 
-    entities: list[BinarySensorEntity] = [
-        SemsStationOnlineBinarySensor(coordinator, station_id),
-        SemsAlarmBinarySensor(coordinator, station_id),
-    ]
+    async_add_entities(
+        [
+            SemsStationOnlineBinarySensor(coordinator, station_id),
+            SemsAlarmBinarySensor(coordinator, station_id),
+        ]
+    )
 
-    # Only battery stations report gridStatus; islanding is meaningless without
-    # one, and PV-only stations omit the field entirely.
-    if (coordinator.data.station_info or {}).get("gridStatus") not in (None, ""):
-        entities.append(SemsOnGridBinarySensor(coordinator, station_id))
+    on_grid_added = False
 
-    async_add_entities(entities)
+    @callback
+    def async_add_on_grid() -> None:
+        """Add the on-grid sensor once the station reports a grid status.
+
+        Only battery stations report gridStatus, and islanding is meaningless
+        without one, so PV-only stations never get this entity. Re-checked on
+        every refresh because the station info request can fail during setup.
+        """
+        nonlocal on_grid_added
+        if on_grid_added:
+            return
+        if (coordinator.data.station_info or {}).get("gridStatus") in (None, ""):
+            return
+
+        on_grid_added = True
+        async_add_entities([SemsOnGridBinarySensor(coordinator, station_id)])
+
+    async_add_on_grid()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_on_grid))
 
 
 class SemsStationBinarySensorBase(

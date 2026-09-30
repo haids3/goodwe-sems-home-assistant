@@ -1330,3 +1330,55 @@ async def test_first_refresh_is_serialized_per_account(
 
     assert [entry.state for entry in entries] == [ConfigEntryState.LOADED] * 2
     assert peak == 1
+
+
+async def test_flow_sensors_appear_after_a_throttled_setup(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Entities missing because setup was rate limited appear on a later refresh."""
+    del enable_custom_integrations
+
+    with_flow = _build_homekit_test_data()
+    # What setup sees when the station-flow request was throttled.
+    without_flow = {
+        key: value for key, value in with_flow.items() if key != "homKit"
+    } | {"hasPowerflow": False}
+
+    entry = _add_entry(hass, MOCK_POWER_STATION_ID)
+    unique_id = f"{MOCK_FLOW_NAMESPACE}-pv"
+
+    with (
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getData",
+            side_effect=[without_flow, with_flow, with_flow],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getEnergyStorageIntegratedCabinets",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getWebStationBasicInfo",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmStatistics",
+            return_value={},
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        ent_reg = er.async_get(hass)
+        assert ent_reg.async_get_entity_id(Platform.SENSOR, DOMAIN, unique_id) is None
+
+        await entry.runtime_data.coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert (
+            ent_reg.async_get_entity_id(Platform.SENSOR, DOMAIN, unique_id) is not None
+        )

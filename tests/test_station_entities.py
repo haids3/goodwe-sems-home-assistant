@@ -403,3 +403,39 @@ async def test_inverter_device_nests_under_station(hass: HomeAssistant) -> None:
     assert station is not None
     assert inverter is not None
     assert inverter.via_device_id == station.id
+
+
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_on_grid_appears_after_a_throttled_setup(hass: HomeAssistant) -> None:
+    """A station-info request that failed at setup must not cost the entity."""
+    with (
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getData",
+            return_value=MOCK_GET_DATA_RESULT,
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getEnergyStorageIntegratedCabinets",
+            return_value=[],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            return_value={},
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getWebStationBasicInfo",
+            side_effect=[{}, MOCK_STATION_INFO, MOCK_STATION_INFO],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getAlarmStatistics",
+            return_value={},
+        ),
+    ):
+        entry = await _setup(hass)
+
+        assert _entity_id(hass, Platform.BINARY_SENSOR, "on_grid") is None
+
+        await entry.runtime_data.coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert _entity_id(hass, Platform.BINARY_SENSOR, "on_grid") is not None
+        assert _state(hass, Platform.BINARY_SENSOR, "on_grid").state == "on"

@@ -92,6 +92,12 @@ Each smart meter is its own device too, keyed by its own serial, so a station
 with more than one meter reports each separately. Previously only the first
 meter of a station was read.
 
+Entities are added as soon as SEMS reports the data behind them, not only
+during setup, so a station whose requests were rate limited while starting up
+gains its missing entities on a later refresh instead of needing a reload. The
+stations of one account also start one at a time, since refreshing them all at
+once is what SEMS answers with HTTP 429.
+
 Upgrading from a version before this change moves the station-level power-flow
 sensors off the old shared `HomeKit` device and onto the station. Their entity
 IDs and history are preserved, so they keep their original `homekit_` names.
