@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from homeassistant.components.number import NumberEntity
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -85,7 +85,34 @@ async def async_setup_entry(
 ):
     """Set up SEMS number entities from a config entry."""
     coordinator: SemsCoordinator = config_entry.runtime_data.coordinator
+    known_unique_ids: set[str] = set()
 
+    @callback
+    def async_add_new_numbers() -> None:
+        """Add number entities for batteries that were not in the payload yet.
+
+        A request that failed or was rate limited during setup would otherwise
+        leave them missing until the entry was reloaded.
+        """
+        new_entities = [
+            entity
+            for entity in _build_numbers(coordinator, config_entry)
+            if entity.unique_id not in known_unique_ids
+        ]
+        if not new_entities:
+            return
+
+        known_unique_ids.update(str(entity.unique_id) for entity in new_entities)
+        async_add_entities(new_entities)
+
+    async_add_new_numbers()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_numbers))
+
+
+def _build_numbers(
+    coordinator: SemsCoordinator, config_entry: SemsConfigEntry
+) -> list[NumberEntity]:
+    """Build every number entity the current coordinator data supports."""
     number_entities: list[NumberEntity] = []
 
     for sn, bats in (coordinator.data.batteries or {}).items():
@@ -121,4 +148,4 @@ async def async_setup_entry(
                         )
                     )
 
-    async_add_entities(number_entities)
+    return number_entities

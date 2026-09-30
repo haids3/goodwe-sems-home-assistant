@@ -14,7 +14,7 @@ from homeassistant.components.switch import (
     SwitchEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -156,11 +156,37 @@ async def async_setup_entry(
 ) -> None:
     """Set up SEMS switches from a config entry."""
     coordinator = config_entry.runtime_data.coordinator
+    known_unique_ids: set[str] = set()
 
-    switch_entities: list[SwitchEntity] = []
+    @callback
+    def async_add_new_switches() -> None:
+        """Add switches for devices that were not in the payload yet.
 
-    for sn in coordinator.data.inverters:
-        switch_entities.append(SemsInverterSwitch(coordinator, sn))
+        A request that failed or was rate limited during setup would otherwise
+        leave its switches missing until the entry was reloaded.
+        """
+        new_entities = [
+            entity
+            for entity in _build_switches(coordinator, config_entry)
+            if entity.unique_id not in known_unique_ids
+        ]
+        if not new_entities:
+            return
+
+        known_unique_ids.update(str(entity.unique_id) for entity in new_entities)
+        async_add_entities(new_entities)
+
+    async_add_new_switches()
+    config_entry.async_on_unload(coordinator.async_add_listener(async_add_new_switches))
+
+
+def _build_switches(
+    coordinator: SemsCoordinator, config_entry: ConfigEntry
+) -> list[SwitchEntity]:
+    """Build every switch the current coordinator data supports."""
+    switch_entities: list[SwitchEntity] = [
+        SemsInverterSwitch(coordinator, sn) for sn in coordinator.data.inverters
+    ]
 
     for sn, bats in (coordinator.data.batteries or {}).items():
         for bat_id, bat_data in bats.items():
@@ -177,4 +203,4 @@ async def async_setup_entry(
                     )
                 )
 
-    async_add_entities(switch_entities)
+    return switch_entities

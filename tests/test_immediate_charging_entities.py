@@ -232,3 +232,72 @@ async def test_inverter_switch_status_five_is_on(hass: HomeAssistant) -> None:
     )
     assert entity_id is not None
     assert hass.states.get(entity_id).state == "on"
+
+
+async def test_battery_entities_appear_after_a_throttled_setup(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Battery switches and numbers appear on a later refresh, without a reload.
+
+    The battery-function request can be rate limited during setup, which used to
+    cost the entities until the entry was reloaded.
+    """
+    del enable_custom_integrations
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test",
+        data={
+            CONF_USERNAME: "user",
+            CONF_PASSWORD: "pass",
+            CONF_STATION_ID: POWER_STATION_ID,
+        },
+    )
+    entry.add_to_hass(hass)
+
+    ent_reg = er.async_get(hass)
+    switch_unique_id = f"{INVERTER_SERIAL}-{BATTERY_ID}-battery_immediate_charging"
+    number_unique_id = f"{INVERTER_SERIAL}-{BATTERY_ID}-end_charge_soc"
+
+    with (
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getData",
+            return_value=MOCK_GET_DATA_RESULT_MINIMAL,
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getEnergyStorageIntegratedCabinets",
+            return_value=CABINETS,
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryGeneralFunctions",
+            side_effect=[{}, FUNCTIONS, FUNCTIONS],
+        ),
+        patch(
+            "custom_components.sems.sems_api.SemsApi.getBatteryImmediateChargingStates",
+            return_value=STATES,
+        ),
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert (
+            ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, switch_unique_id)
+            is None
+        )
+        assert (
+            ent_reg.async_get_entity_id(Platform.NUMBER, DOMAIN, number_unique_id)
+            is None
+        )
+
+        await entry.runtime_data.coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert (
+            ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, switch_unique_id)
+            is not None
+        )
+        assert (
+            ent_reg.async_get_entity_id(Platform.NUMBER, DOMAIN, number_unique_id)
+            is not None
+        )

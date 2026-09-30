@@ -407,7 +407,9 @@ def test_at_most_two_requests_in_flight() -> None:
         with lock:
             in_flight += 1
             peak = max(peak, in_flight)
-        time.sleep(0.05)
+        # Longer than _MinRequestSpacingSeconds, so spacing staggers the starts
+        # without preventing the two permitted requests from overlapping.
+        time.sleep(_MinRequestSpacingSeconds * 2)
         with lock:
             in_flight -= 1
         response = Mock(status_code=200)
@@ -421,9 +423,7 @@ def test_at_most_two_requests_in_flight() -> None:
         results = _run_parallel(6, lambda: api.getWebStationFlow(MOCK_STATION_ID_1))
 
     assert results == [{}] * 6
-    # Request spacing means short requests rarely overlap at all, so this is the
-    # concurrency ceiling rather than the expected value.
-    assert peak <= 2
+    assert peak == 2
 
 
 # ---------------------------------------------------------------------------
