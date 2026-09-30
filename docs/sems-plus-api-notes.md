@@ -278,6 +278,148 @@ live data before assuming.)
 
 ---
 
+## Remote control (device settings)
+
+Captured from the SEMS+ **web** portal on 2026-09-30 (the web and app share these
+endpoints), then re-read live through `SemsApi`. Every path is under
+`/sems-remote/api` unless it says otherwise. All reads below are safe; the two
+writes were captured, not replayed.
+
+### Discovering what a device can do
+
+| purpose | path | body |
+|---|---|---|
+| tabs only | `v2/address/remote/getAllDeviceFunctionTabs` | `{"sn", "batIndex": "", "menuCode": 0}` |
+| one tab's functions | `v2/address/remote/getDeviceFunctionTabMenus` | `{"sn", "menuId", "batIndex": "", "menuCode": 0}` |
+| **whole tree, one call** | `v2/address/remote/getTopTreeByCode` | `{"sn", "menuCode": 0, "batIndex": ""}` |
+
+**CORRECTED:** `getDeviceFunctionTabMenus` returned `{}` for every shape tried
+earlier because it wants the tab's **`menuId`** (from `getAllDeviceFunctionTabs`),
+not a `module` name. `module: "GENERAL_FUNCTIONS"` with `menuCode: 1` and the
+cabinet's `batIndex` is a different view, which is why the battery controls
+worked all along.
+
+`getTopTreeByCode` is the one to use: on an All-in-One it returned ~215 KB, 70-odd
+menus and ~260 functions (device start/stop, energy management, environmental
+control, AC side, PV, battery, protection, general settings). Menus nest via
+`children`; functions sit in each menu's `functions`. A function looks like:
+
+```json
+{
+  "address": "45218", "id": "1989877704267702274",
+  "translateKey": "run_stop", "funcKey": null,
+  "rwType": "RW",            // RW | RO | WO
+  "control": 8,              // 8 switch, 3 number, 4 read-only enum, 16 button,
+                             // 20 select, 24 time (HHmm), 25 bitmask, 33 switch w/ dependants
+  "controlAttr": "[{\"transKey\":\"remote_Switch_on\",\"value\":\"1\"}, ...]",  // JSON string
+  "range": "[0,1]", "gain": 1, "unit": "N/A", "type": "U16", "size": 1,
+  "cpuType": "DSP", "preCommand": "FB"
+}
+```
+
+Menus reuse function `translateKey`s (`backup_mode` is both), but only functions
+carry `address` and `id`. Time pairs (start/end) come as a function plus
+`relationFuncs`.
+
+### Reading and writing values
+
+- **Read:** `v1/address/remote/get-cache-device-function-parameters`
+  `{"sn", "addresses": [...], "addrFuncMap": {address: id}}` → `data.data` is
+  `{address: value}`. Values appear to be **raw ÷ `gain`**: TOU slot power reads
+  `32` here, `320` via `/remote/get`, and its function has `gain: 10`.
+- **Write:** `v1/address/remote/setDeviceFunctionParameters`
+  `{"sn", "addressMap": {address: value}, "addrFuncMap", "controlItemLogs",
+  "waitingForDevice": true, "plantId", "deviceName", "virtualSn"}`. This is what
+  the battery controls use. Whether `addressMap` takes raw or ÷gain values for a
+  `gain ≠ 1` function is **not confirmed**.
+
+### Start / stop
+
+Tab `device_start_stop`:
+
+| address | translateKey | rw | values |
+|---|---|---|---|
+| `45218` | `run_stop` | RW | `1` run (`remote_Switch_on`), `0` stop |
+| `45221` | `restart` | WO | `361` restarts |
+
+`run_stop` reads `1` on a running All-in-One. This replaces the hard-coded
+`80017` / `2043643517552594945` pair, which has no function behind it on this
+model. A write through `setDeviceFunctionParameters` has not been observed in a
+capture or on hardware yet.
+
+### Energy management highlights (All-in-One)
+
+| address | translateKey | notes |
+|---|---|---|
+| `47509` / `47510` | `grid-tie_power_limit` / `limit_setting` | export limit enable, limit in W (5000 seen) |
+| `47511` | `self_use` | RO, `1` = self-use mode active |
+| `47605` / `47870` / `47606` | backup mode, grid charge enable, charge power % | |
+| `47612` | `tou_mode_enable` | `1` = TOU mode on |
+| `47038` | `off_grid_mode` | |
+| `47609` | `delayed_charge` ("smart charging") | |
+
+### TOU (time-of-use) schedule
+
+Higher-level endpoints the web page uses:
+
+- **Read:** `POST v1/remote/get` `{"functionName": ["TOU1", ..., "TOU12"], "sn"}` →
+  `data.items[]` of `{functionName, value}`, in no particular order. Slot N:
+  ```json
+  {"TOUStartN": "18:00", "TOUEndN": "21:00", "TOUWeekEnableN": 249,
+   "TOUWeekN": [0,1,2,3,4,5,6], "ChargeDischargePWN": 320,
+   "ChargeCutOffSetN": 60, "TOUMonthN": [0,...,11]}
+  ```
+  Unused slots are all zeros with empty lists.
+- **Write:** `POST v1/remote/set`
+  `{"functionName": "TOU3", "sn", "plantId", "deviceName", "virtualSn",
+  "data": {<slot 3 fields as above>}, "waitingForDevice": true,
+  "controlItemLogs": {...}}`. The body `controlItemLogs` carried is a
+  human-readable audit trail (`start_t`, `end_t`, `switch`, `wkly_rep`,
+  `cd_mod`, `import_power_soc`, `discharge_limit_pw`). The captured "response"
+  echoed the request shape with the slot switched off, so it was most likely a
+  second request rather than the reply. The real reply shape is unknown.
+- **Slot names:** `POST /sems-plant/api/tou/metric-config/query` `{"sn"}` →
+  `data.config` is a JSON **string**:
+  `{"timePeriodNameMap": {"TOU1": "", "TOU2": "10% export", ...}}`.
+
+Field meanings:
+
+- `TOUWeekEnable`: `249` = slot enabled, `6` = disabled (the function tree lists
+  these as the day function's `highAttr`). One unused slot read `85`, meaning unknown.
+- `TOUWeek`: `0` = Sunday ... `6` = Saturday.
+- `TOUMonth`: `0` = January ... `11` = December. The web UI also sends `12`,
+  which is not a month and seems harmless.
+- `ChargeDischargePW`: per-mille of rated power, **positive = discharge,
+  negative = charge** (`-1000` = charge at full rate; `320` logged as
+  `cd_mod: discharge`, `discharge_limit_pw: 32`).
+- `ChargeCutOffSet`: SOC % at which the slot stops.
+
+The same slots are registers in the `tou_mode` menu, six per slot: start, end
+(HHmm as an int, `1800`), day word (high byte = enable `249`/`6`, low byte =
+weekday bitmask, bit 0 = Sunday, so `63871` = `0xF97F` = on, every day), power
+(÷gain, see above), cutoff SOC, month bitmask (`4095` = Jan–Dec). Matched by value
+on one unit: TOU1 → `47547–47552`, TOU2 → `47553–47558`, TOU3 → `47559–47564`,
+TOU4 → `47565–47570`. The other four register groups (`47577`, `47583`, `47840`,
+`47852`) were all zero, so slots 5–8 are unmapped. The tree has **8** work groups
+while `/remote/get` offers **12** slots. The menu names (`工作组_N`) do **not** match
+slot numbers.
+
+### Other endpoints seen in the capture
+
+- `POST v1/remote/get` `{"functionName": ["INVCurrentWorkMode"], "sn"}` →
+  `{"INVCurrentWorkMode": 1}`. Read `102` later the same day, so it is an
+  undocumented enum.
+- `POST v1/address/remote/battery/GetBatteryList` `{"sn"}` → the configured
+  battery model tree (`high`/`low` voltage). Each leaf has a `battery` with
+  `model` (`GW5.1/8.3-BAT-D-G20`), `manufacturer`, `capacity`, charge/discharge
+  voltage and current, and depth-of-discharge. That is a model string for the
+  battery rack device, which `getWebInverterDevices` lacks.
+- `POST v1/firmware-management/exist-force-upgrade` `{"plantId", "sn"}` →
+  `{existForceUpgrade, existUpgrading, canOwnerForceUpgrade, taskGroupIds}`.
+- `/sems-alarm/api/alarm/count`: seen, body and response not captured.
+
+---
+
 ## What's NOT nailed down
 
 Mostly resolved by the 2026-09-29 live verification. What remains:
