@@ -2012,6 +2012,95 @@ class TestSemsApi:
         )
 
     @patch.object(SemsApi, "_make_api_call")
+    def test_get_device_control_tree_is_cached(self, mock_api_call):
+        """The control tree is static, so it is fetched once per device."""
+        tree = {"sn": "test_sn", "functionMenus": {"children": []}}
+        mock_api_call.return_value = tree
+
+        assert self.api.getDeviceControlTree("test_sn") == tree
+        assert self.api.getDeviceControlTree("test_sn") == tree
+
+        mock_api_call.assert_called_once_with(
+            "/sems-remote/api/v2/address/remote/getTopTreeByCode",
+            data='{"sn": "test_sn", "menuCode": 0, "batIndex": ""}',
+            renewToken=False,
+            maxTokenRetries=2,
+            operation_name="getDeviceControlTree API call",
+            is_web=True,
+            retry_on_api_error=False,
+            token_type="web",
+        )
+
+    @patch.object(SemsApi, "_make_api_call")
+    def test_get_device_control_tree_failure_is_not_retried_at_once(
+        self, mock_api_call
+    ):
+        """A failed tree request waits before being tried again."""
+        mock_api_call.return_value = None
+
+        assert self.api.getDeviceControlTree("test_sn") == {}
+        assert self.api.getDeviceControlTree("test_sn") == {}
+
+        mock_api_call.assert_called_once()
+
+    @patch.object(SemsApi, "_make_api_call")
+    def test_get_device_function_values(self, mock_api_call):
+        """Function values come back keyed by address."""
+        mock_api_call.return_value = {"sn": "test_sn", "data": {"45218": 1}}
+
+        result = self.api.getDeviceFunctionValues(
+            "test_sn", {"45218": "1989877704267702274"}
+        )
+
+        assert result == {"45218": 1}
+        mock_api_call.assert_called_once_with(
+            "/sems-remote/api/v1/address/remote/get-cache-device-function-parameters",
+            data='{"sn": "test_sn", "addresses": ["45218"], "addrFuncMap": {"45218": "1989877704267702274"}}',
+            renewToken=False,
+            maxTokenRetries=2,
+            operation_name="getDeviceFunctionValues API call",
+            is_web=True,
+            retry_on_api_error=False,
+            token_type="web",
+        )
+
+    @pytest.mark.parametrize(
+        ("running", "value", "log_value"),
+        [
+            pytest.param(True, 1, "remote_Switch_on", id="start"),
+            pytest.param(False, 0, "remote_Switch_off", id="stop"),
+        ],
+    )
+    @patch.object(SemsApi, "setDeviceFunctionParameters")
+    def test_set_inverter_run_state(self, mock_web_control, running, value, log_value):
+        """Run/stop writes the function's own address and id."""
+        mock_web_control.return_value = True
+
+        self.api.setInverterRunState(
+            "station123", "inverter123", "Inverter", "45218", "func-id", running
+        )
+
+        mock_web_control.assert_called_once_with(
+            "station123",
+            "inverter123",
+            "Inverter",
+            {"45218": value},
+            {"run_stop": log_value},
+            {"45218": "func-id"},
+            virtual_sn="inverter123",
+        )
+
+    @patch.object(SemsApi, "setDeviceFunctionParameters")
+    def test_set_inverter_run_state_failure_raises(self, mock_web_control):
+        """A rejected run/stop write is reported instead of silently ignored."""
+        mock_web_control.return_value = False
+
+        with pytest.raises(HomeAssistantError, match="Unable to stop inverter"):
+            self.api.setInverterRunState(
+                "station123", "inverter123", "Inverter", "45218", "func-id", False
+            )
+
+    @patch.object(SemsApi, "_make_api_call")
     def test_get_battery_immediate_charging_states(self, mock_api_call):
         """Test getBatteryImmediateChargingStates method."""
         expected_data = {"47545": 0, "47546": 100, "47603": 100}

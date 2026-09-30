@@ -138,6 +138,12 @@ _WEB_STATION_FLOW_ENDPOINT = ApiEndpoint("/sems-plant/api/stations/flow", "web")
 _WEB_STATION_BASIC_INFO_ENDPOINT = ApiEndpoint(
     "/sems-plant/api/app/v2/stations/basic/info", "web"
 )
+_WEB_CONTROL_TREE_ENDPOINT = ApiEndpoint(
+    "/sems-remote/api/v2/address/remote/getTopTreeByCode", "web"
+)
+_WEB_FUNCTION_VALUES_ENDPOINT = ApiEndpoint(
+    "/sems-remote/api/v1/address/remote/get-cache-device-function-parameters", "web"
+)
 _ALARM_STATISTICS_ENDPOINT = ApiEndpoint("/sems-alarm/api/alarm/statistics", "web")
 _ALARM_PAGE_ENDPOINT = ApiEndpoint("/sems-alarm/api/v2/alarm/page", "web")
 _ALARM_PAGE_SIZE = 20
@@ -2107,6 +2113,95 @@ class SemsApi:
             retry_on_api_error=False,
         )
         return result if isinstance(result, dict) else {}
+
+    def getDeviceControlTree(
+        self, serialNumber: str, renewToken: bool = False, maxTokenRetries: int = 2
+    ) -> dict[str, Any]:
+        """Get every remote-control function a device exposes, as one tree.
+
+        This is the tree behind the SEMS+ Web "Remote Setting" page: a menu per
+        tab (device_start_stop, energy_management, ...), each function carrying
+        the address and id a write needs.
+        """
+        cache_key = f"control_tree:{serialNumber}"
+        cached = self._web_cache.get(cache_key)
+        if (
+            cached
+            and time.monotonic() - cached[0] < _WEB_FUNCTION_MENUS_REFRESH_SECONDS
+        ):
+            return cached[1]
+        if self._recently_failed(cache_key):
+            return {}
+
+        result = self._make_api_call(
+            _WEB_CONTROL_TREE_ENDPOINT.url_part,
+            data=json.dumps({"sn": serialNumber, "menuCode": 0, "batIndex": ""}),
+            renewToken=renewToken,
+            maxTokenRetries=maxTokenRetries,
+            operation_name="getDeviceControlTree API call",
+            is_web=True,
+            retry_on_api_error=False,
+            token_type=_WEB_CONTROL_TREE_ENDPOINT.token_type,
+        )
+        if not isinstance(result, dict):
+            self._remember_failure(cache_key)
+            return {}
+        self._web_cache[cache_key] = (time.monotonic(), result)
+        return result
+
+    def getDeviceFunctionValues(
+        self,
+        serialNumber: str,
+        functions: dict[str, str],
+        renewToken: bool = False,
+        maxTokenRetries: int = 2,
+    ) -> dict[str, Any]:
+        """Get the current value of each function, keyed by address.
+
+        `functions` maps each address to its function id.
+        """
+        result = self._make_api_call(
+            _WEB_FUNCTION_VALUES_ENDPOINT.url_part,
+            data=json.dumps(
+                {
+                    "sn": serialNumber,
+                    "addresses": list(functions),
+                    "addrFuncMap": functions,
+                }
+            ),
+            renewToken=renewToken,
+            maxTokenRetries=maxTokenRetries,
+            operation_name="getDeviceFunctionValues API call",
+            is_web=True,
+            retry_on_api_error=False,
+            token_type=_WEB_FUNCTION_VALUES_ENDPOINT.token_type,
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
+            return {}
+        return result["data"]
+
+    def setInverterRunState(
+        self,
+        plant_id: str,
+        serial_number: str,
+        device_name: str,
+        function_address: str,
+        function_id: str,
+        running: bool,
+    ) -> None:
+        """Start or stop an inverter through its own run/stop function."""
+        if not self.setDeviceFunctionParameters(
+            plant_id,
+            serial_number,
+            device_name,
+            {function_address: 1 if running else 0},
+            {"run_stop": "remote_Switch_on" if running else "remote_Switch_off"},
+            {function_address: function_id},
+            virtual_sn=serial_number,
+        ):
+            raise exceptions.HomeAssistantError(
+                f"Unable to {'start' if running else 'stop'} inverter {device_name}"
+            )
 
     def stopImmediateCharging(
         self,

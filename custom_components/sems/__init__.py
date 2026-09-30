@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -24,6 +25,7 @@ from .const import (
     DOMAIN,
     GOODWE_SPELLING,
     HOMEKIT_NO_SERIAL,
+    NON_INVERTER_DEVICE_TYPES,
     PLATFORMS,
     account_key,
     coerce_api_int,
@@ -46,6 +48,37 @@ _IMMEDIATE_CHARGING_FUNCTION_KEYS = {
     "end_charge_soc",
     "bat_immediate_charge_power",
 }
+
+# Control functions read from an inverter's own control tree, by translateKey.
+_INVERTER_CONTROL_KEYS = frozenset({"run_stop"})
+
+
+def _find_control_functions(
+    tree: dict[str, Any], keys: frozenset[str]
+) -> dict[str, dict[str, str]]:
+    """Collect the writable functions named in `keys` from a control tree."""
+    found: dict[str, dict[str, str]] = {}
+    pending: deque[Any] = deque([tree])
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, list):
+            pending.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        key = node.get("translateKey")
+        # Menus share translateKeys with functions but carry no address.
+        if (
+            key in keys
+            and key not in found
+            and "W" in str(node.get("rwType", ""))
+            and node.get("address")
+            and node.get("id")
+        ):
+            found[key] = {"address": str(node["address"]), "id": str(node["id"])}
+        pending.extend(v for v in node.values() if isinstance(v, (dict, list)))
+    return found
+
 
 # Unique ID suffixes only used by HomeKit/powerflow sensors (not inverter sensors).
 _HOMEKIT_UNIQUE_ID_SUFFIXES = (
@@ -174,6 +207,9 @@ class SemsData:
     alarm_counts: dict[str, Any] | None = None
     alarms: list[dict[str, Any]] = field(default_factory=list)
     meters: dict[str, dict[str, Any]] = field(default_factory=dict)
+    inverter_controls: dict[str, dict[str, dict[str, Any]]] = field(
+        default_factory=dict
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -396,6 +432,43 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
 
         return immediate_charging
 
+    async def _async_get_inverter_controls(
+        self, data_result: dict[str, Any]
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Find each inverter's own control functions and read their values."""
+        controls: dict[str, dict[str, dict[str, Any]]] = {}
+        for inverter in data_result.get("inverter") or []:
+            inverter_full = inverter.get("invert_full") or {}
+            sn = inverter_full.get("sn")
+            if (
+                not isinstance(sn, str)
+                or inverter_full.get("deviceType") in NON_INVERTER_DEVICE_TYPES
+            ):
+                continue
+            try:
+                tree = await self.hass.async_add_executor_job(
+                    self.sems_api.getDeviceControlTree, sn
+                )
+                functions = _find_control_functions(tree, _INVERTER_CONTROL_KEYS)
+                if not functions:
+                    continue
+                values = await self.hass.async_add_executor_job(
+                    self.sems_api.getDeviceFunctionValues,
+                    sn,
+                    {func["address"]: func["id"] for func in functions.values()},
+                )
+            except SemsAuthError, SemsRateLimitedError:
+                raise
+            except Exception as err:
+                # Controls are optional; a failure must not take telemetry down.
+                _LOGGER.debug("Unable to fetch SEMS inverter controls: %s", err)
+                continue
+            controls[sn] = {
+                key: {**func, "value": values.get(func["address"])}
+                for key, func in functions.items()
+            }
+        return controls
+
     async def _async_get_station_info(self) -> dict[str, Any] | None:
         """Fetch station-wide status and on/off-grid state."""
         try:
@@ -481,6 +554,7 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
             )
             batteries = await self._async_get_battery_functions(energy_storage_cabinets)
             immediate_charging = await self._async_get_immediate_charging(batteries)
+            inverter_controls = await self._async_get_inverter_controls(data_result)
             station_info = await self._async_get_station_info()
             alarm_counts, alarms = await self._async_get_alarms()
 
@@ -635,6 +709,7 @@ class SemsDataUpdateCoordinator(DataUpdateCoordinator[SemsData]):
                 homekit=homekit,
                 currency=currency,
                 immediate_charging=immediate_charging,
+                inverter_controls=inverter_controls,
                 unavailable_inverter_sources=unavailable_inverter_sources,
                 unavailable_homekit_sources=raw_homekit_sources,
                 station_info=station_info,

@@ -71,13 +71,44 @@ class SemsInverterSwitch(SemsSwitchBase):
         super().__init__(coordinator, serial_number, "switch", "Inverter Control")
 
     @property
+    def _run_stop(self) -> dict[str, Any] | None:
+        """The inverter's own run/stop function, when its control tree has one."""
+        return self.coordinator.data.inverter_controls.get(self.serial_number, {}).get(
+            "run_stop"
+        )
+
+    @property
     def is_on(self) -> bool | None:
+        if (run_stop := self._run_stop) is not None:
+            if run_stop["value"] is None:
+                return None
+            return run_stop["value"] == 1
+        # Without a run/stop function, "producing normally" is the best proxy,
+        # though it also reads off at night and while offline.
         return (
             self.coordinator.data.inverters.get(self.serial_number, {}).get("status")
             in INVERTER_ON_STATUSES
         )
 
+    async def _async_set_run_state(
+        self, run_stop: dict[str, Any], running: bool
+    ) -> None:
+        await self._async_execute(
+            self.coordinator.sems_api.setInverterRunState,
+            self.coordinator.station_id,
+            self.serial_number,
+            self.coordinator.data.inverters[self.serial_number].get(
+                "name", self.serial_number
+            ),
+            run_stop["address"],
+            run_stop["id"],
+            running,
+        )
+
     async def async_turn_on(self, **kwargs: Any) -> None:
+        if (run_stop := self._run_stop) is not None:
+            await self._async_set_run_state(run_stop, True)
+            return
         await self._async_execute(
             self.coordinator.sems_api.change_status,
             self.serial_number,
@@ -89,6 +120,9 @@ class SemsInverterSwitch(SemsSwitchBase):
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if (run_stop := self._run_stop) is not None:
+            await self._async_set_run_state(run_stop, False)
+            return
         await self._async_execute(
             self.coordinator.sems_api.change_status,
             self.serial_number,
