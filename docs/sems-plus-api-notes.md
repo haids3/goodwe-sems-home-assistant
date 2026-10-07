@@ -25,6 +25,13 @@ Goal: extend a Home Assistant custom integration with alarms + on/off-grid statu
   ```
   (hermes-dec repo: `/home/hayden/tools/hermes-dec-main`, jadx: `/home/hayden/tools/jadx-1.5.6`)
 
+A second source, added 2026-10-08, is a HAR capture of the SEMS+ **web portal**
+(semsplus.goodwe.com). Its JS bundles are plain minified JavaScript and far easier
+to read than the Hermes output. They are kept locally, not committed, in
+`/workspaces/sems-plus-app-decompile/web-js-2026-10-08/`. Sections citing the
+"2026-10-08 capture" or the "web JS" come from there. The second-data MQTT feed
+was then verified with a listen-only probe.
+
 Community SEMS API clients (pysems, etc.) already have auth nailed, so auth is included
 here only for context/cross-reference — the new work is alarms, grid status, and energy flow.
 
@@ -192,6 +199,15 @@ Corrections to the earlier guesses:
 - `duration` is a pre-rendered human string ("1m 6s"), null while occurring.
 
 Request body that works: `{"pageIndex": 1, "pageSize": 20, "stationIds": [id]}`.
+
+**Filters work** (web capture, 2026-10-08). The same account and range returned no rows
+with `"status": 0` and the recovered rows with `"status": 1`. The web sends
+`{"timeType": 1, "startTime": "yyyy-MM-dd HH:mm:ss", "endTime": ..., "status": 0|1,
+"confirmed": ["0"], "deviceType": [], "standardFaultLevel": [],
+"faultClassification": [], "starStatus": [], "pageIndex", "pageSize"}`. Level
+values come from `POST filter/template/alarm/level`: `Total_FaultLevel_Prompt`,
+`Total_FaultLevel_alarm`, `Total_FaultLevel_Fault`. The web also calls
+`alarm/statistics` with `{"status": 0, "stationId": id}`.
 `alarm/detail` rejects `{id, warningid}` with `P0214 missing parameter`; its real
 parameters were not determined (and were not needed — `alarm/page` already
 carries everything above).
@@ -238,6 +254,28 @@ Also present on this response (seen destructured in `decompiled.js:983700-983850
 `name`, `permissions[]`, `hemsSn`, `powerStationType`, `powerStationTypeUser`,
 `powerStationTypeActual`.
 
+The web portal calls `POST /sems-plant/api/portal/stations/basic/info?stationId=`,
+which returns the same fields plus the following (2026-10-08 capture):
+
+- **`permissions[]` decides whether controls are allowed.** The web disables every
+  device control unless the list contains **`INVERTER_REMOTE`**, and reading
+  settings needs **`INVERTER_REMOTE_READ`** (`usePermissions`:
+  `deviceRemoteOrg = perms.includes("INVERTER_REMOTE")`). A station shared to an
+  installer carried `PV_CONFIG, DS_CONFIG, INVERTER_REMOTE, STATION_PRICE_CONFIG,
+  INVERTER_REMOTE_READ, STATION_UNBIND, STATION_VIEW`. An installer's own station
+  also had `STATION_EDIT, INVERTER_ADD/EDIT/DELETE, FIRMWARE_UPGRADE, …`. This is
+  not an ownership signal (`isStationOwner` was false on all of them), but it is
+  exactly what SEMS+ enforces.
+- **`chartMap.energy_flow`**: a comma list of the flow fields this station has,
+  e.g. `"pSystem,soc,pBat,pConsum,pGrid"`. One station added `pThird`; a PV-only
+  station had `"pSystem,pConsum,pGrid"`.
+- `isAllInOne`, `aiSn`, `aiType` (`"EMS"`), `isMicro`, `isParallel`, `isHems`,
+  `hasThirdPartyDevice`, `isStationOwner`, `dataAuthorization`.
+
+`GET /sems-plant/api/station-share/share-info?stationId=` → `{type: 2,
+sharePermission: 1, sharePermissionName: "monitoring_control", ...}` on a shared
+station.
+
 One call → two useful HA binary_sensors (online/offline, on/off-grid).
 
 ---
@@ -268,13 +306,70 @@ Fields, from `useEnergyFlowNodes` destructuring (`decompiled.js:1779509-1779527`
 }
 ```
 
-**Sign conventions (confirmed against real inverter, not just decompiled):**
+**Sign conventions:**
 - `pBat`: **positive = discharging**, **negative = charging**
-- `pGrid`: **positive = importing**, **negative = exporting**
+- `pGrid`: **CORRECTED: positive = exporting, negative = importing.** The earlier
+  "positive = importing" was wrong. A day of 1-minute history
+  (`v1/hems/power`, below) shows `pGrid = -8.99` while the battery grid-charged
+  at `pBat = -4.97` with `pConsum = 4.05` and no PV, and `+3.61` while exporting
+  midday. `pSystem + pBat - pGrid = pConsum` holds in every sample. The
+  second-data MQTT feed and the meter's `pAc` use the same sign.
+- `pSystem` and `pConsum` were non-negative in every sample.
 
-(`pSystem`/`pConsum`/etc. sign conventions not separately verified — likely
-always non-negative, i.e. magnitude-only, but worth a sanity check against
-live data before assuming.)
+The response also carries `pAc`, `consumFlag`, `isGoodweInverter` and
+**`refreshTime`**. That timestamp advances once per **minute**, as does device
+telemetry, so polling faster than 60 s gains nothing.
+
+`flows` is an object, not a list: `{"pSystem": ["pConsum", "pGrid"]}` means PV
+feeds the load and the grid.
+
+### Real-time push: second-data MQTT (live-verified 2026-10-08)
+
+The web portal gets live power over MQTT rather than by polling. A
+listen-only probe from plain Python (paho-mqtt over websockets) works:
+
+1. `GET /sems-plant/api/second-data/enable?stationId=` → `true`/`false`.
+2. `GET /sems-plant/api/second-data/config` → `{clientId, userName, password}`.
+   The user name and password are opaque encrypted blobs that are **passed to the
+   broker unchanged**. The client decrypts nothing.
+3. Connect `wss://netty-wss-<region>.iot.goodwe-power.com:8885/mqtt` (`au`,
+   `eu`, `hk`, `us`; China is `hz`) with TLS, websocket path `/mqtt`,
+   `clean_session`, that client ID and those credentials. CONNACK was immediate.
+4. Subscribe (QoS 0, granted) to:
+   - `/goodwe/second-data/station/<stationId>`
+   - `/goodwe/second-data/device/<sn>` for each device (inverter or All-in-One,
+     each battery rack, meter)
+
+Messages arrive **every 5 seconds**, not retained, within about 3 s of subscribing.
+Offline devices and the dongle send nothing. The payload is plain JSON (the web code
+also tolerates a `{title, message}` envelope with JSON inside `message`). Every
+number arrives as a **string**, and fields can be `null`. `time` is station-local
+with no zone.
+
+```json
+// station
+{"stationId", "time": "yyyy-MM-dd HH:mm:ss", "pSystem": "5.931", "pAc", "pDc",
+ "pConsum": "1.007", "pBat": "0.0", "pGrid": "4.924", "soc": "100.0",
+ "qAc", "fAc", "pf", "flows": {"pSystem": ["pConsum", "pGrid"]}, "traceId"}
+// inverter / All-in-One
+{"sn", "time", "pAc", "pDc", "qAc", "va", "ACApparentPower", "pf", "pGrid",
+ "pInv", "pBackup", "pBat", "pSystem", "soc", "status", "workStu",
+ "workModeStu", "powerLimitStu": "1", "powerLimitValue": "5000",
+ "mainInverter", "gridPF", "storagePF", "pDiesel", "rssi"}
+// battery rack
+{"sn", "time", "soc", "pBat", "a", "v", "voltage", "dcDcV",
+ "batterySysNumber": "BB1", "batteryRackNumber": "6", "bmsCommStu",
+ "bbWorkStu", "workStu", "status"}
+// smart meter
+{"sn", "time", "pAc", "totalPac", "qAc", "fAc", "pf", "communicationStatus"}
+```
+
+What is not known: whether the encrypted credentials expire (re-fetch them on
+every reconnect), and how many concurrent clients one account may hold. The
+meaning of the battery fields `a` and `v` is unclear: `v` read 86–89 while
+`voltage` read about 400. The meter's `qAc` looks like var while the station's
+looks like kVar. Never publish: the same broker carries
+`/goodwe/ccm/server/frpset/<sn>`, which opens a remote tunnel on the device.
 
 ---
 
@@ -299,6 +394,48 @@ not a `module` name. `module: "GENERAL_FUNCTIONS"` with `menuCode: 1` and the
 cabinet's `batIndex` is a different view, which is why the battery controls
 worked all along.
 
+**The web's discovery sequence per device** (2026-10-08 capture, confirmed in the
+web JS):
+
+1. `POST v2/address/remote/get-related-sn {"sn", "menuCode"}` → `data.sn`
+   ("realSn"). A **smart meter** (`VD3001000<inverter sn>`) resolves to its host
+   inverter, and every later call uses that sn. Inverters, All-in-Ones and dongles
+   resolve to themselves.
+2. `GET v2/address/remote/get-work-mode?sn=` → `{"workMode": "3.0"|"2.0", "arm": "745"}`.
+   This picks the work-mode UI version (see *Work modes* below).
+3. `getAllDeviceFunctionTabs {"sn": realSn, "batIndex": "", "menuCode"}`.
+4. `getDeviceFunctionTabMenus {"sn": realSn, "module": "GENERAL_FUNCTIONS",
+   "batIndex": "", "menuCode"}` returns the **curated quick-settings set** the device
+   page shows: run/stop, restart, export limit, work modes, TOU groups, peak
+   shave, delayed charge. That is about 60 functions on an All-in-One, against
+   about 270 in the full tree, which makes it the natural source for Home
+   Assistant entities.
+5. The full settings page then loads `getTopTreeByCode`,
+   `v1/address/remote/battery/GetBatteryList`, `v2/address/remote/safetycountry/recommend`
+   (about 690 KB, a list of safety countries), and per tab `getDeviceFunctionTabMenus
+   {"menuId"}` plus `get-cache-device-function-parameters`.
+
+The sn the web sends is `deviceType == SWITCH_CAB ? deviceSn : batterySn || realSn || deviceSn`.
+
+**`menuCode` is the device class** (the web's device-type table):
+
+| deviceType | menuCode |
+|---|---|
+| `INVERTER`, `ENERGY_STORAGE_INTEGRATED_CABINET`, `PCS`, `MICRO_INVERTER` | 0 |
+| `BAT_SYS` | 1 |
+| `SMART_METER` | 2 |
+| `DONGLE` | 3 |
+| `EV_CHARGER` | 4 |
+| `SWITCH_CAB` | 5 |
+| `DATA_LOGGER` | 6 |
+| `BAT_BUSBAR` | 8 |
+| `DIESEL_GEN` | 9 |
+
+A meter's tree (menuCode 2, host inverter sn) holds meter binding, CT
+checks and direction (RO), and `meter_target_offset` (W). A dongle's (menuCode 3)
+holds soft restart, Bluetooth, Modbus-TCP, shell, auto-upgrade and LAN switches,
+none of which belong in Home Assistant.
+
 `getTopTreeByCode` is the one to use: on an All-in-One it returned ~215 KB, 70-odd
 menus and ~260 functions (device start/stop, energy management, environmental
 control, AC side, PV, battery, protection, general settings). Menus nest via
@@ -309,8 +446,7 @@ control, AC side, PV, battery, protection, general settings). Menus nest via
   "address": "45218", "id": "1989877704267702274",
   "translateKey": "run_stop", "funcKey": null,
   "rwType": "RW",            // RW | RO | WO
-  "control": 8,              // 8 switch, 3 number, 4 read-only enum, 16 button,
-                             // 20 select, 24 time (HHmm), 25 bitmask, 33 switch w/ dependants
+  "control": 8,              // see the control-type table below
   "controlAttr": "[{\"transKey\":\"remote_Switch_on\",\"value\":\"1\"}, ...]",  // JSON string
   "range": "[0,1]", "gain": 1, "unit": "N/A", "type": "U16", "size": 1,
   "cpuType": "DSP", "preCommand": "FB"
@@ -321,6 +457,31 @@ Menus reuse function `translateKey`s (`backup_mode` is both), but only functions
 carry `address` and `id`. Time pairs (start/end) come as a function plus
 `relationFuncs`.
 
+Control types, from the web's renderer:
+
+| control | widget | notes |
+|---|---|---|
+| 3 | number | `range` is raw; the displayed range is raw ÷ `gain` |
+| 4 | radio select | **CORRECTED:** writable, not read-only (`breathing_light` 47879 is RW, options in `controlAttr`) |
+| 8 | switch | on/off values in `controlAttr` |
+| 16 | button / command | `restart` writes `361`; grid-tie `start_up`/`shutdown` write `0` |
+| 19 | safety country | |
+| 20 | dropdown select | |
+| 22 | status text / mode | mostly RO |
+| 24 | time range | start function plus end in `relationFuncs`, HHmm as an int |
+| 25 | bitmask (month / weekday) | |
+| 26–36 | composites | 27 spans several registers via `subAddress`, 28 is a 32-bit bitmask, 35 is a date-time split into YYMM/DDHH/mmss |
+
+Some functions write single bits: the body then carries `bitAddresses: [{address,
+bitAddress, dataFormat, dataIndex, writeValue}]` alongside `addressMap`.
+
+**Identifiers.** `funcKey` is stable English (`PWLimitEnable`, `PWLimitThr`,
+`SelfUseMode`, `BackupMode`, `TOUMode`, `OffGridMode`, `BreathLightSet`, `Restart`,
+`ShutDown`) but **mostly null**. `translateKey` is always set but **not unique
+within a menu**: the grid-tie inverter has two `limit_setting`, one in `W`
+(40328) and one in `%Pn` (40336). Match on `funcKey`, else on `translateKey`
+together with the menu path and unit.
+
 ### Reading and writing values
 
 - **Read:** `v1/address/remote/get-cache-device-function-parameters`
@@ -330,8 +491,22 @@ carry `address` and `id`. Time pairs (start/end) come as a function plus
 - **Write:** `v1/address/remote/setDeviceFunctionParameters`
   `{"sn", "addressMap": {address: value}, "addrFuncMap", "controlItemLogs",
   "waitingForDevice": true, "plantId", "deviceName", "virtualSn"}`. This is what
-  the battery controls use. Whether `addressMap` takes raw or ÷gain values for a
-  `gain ≠ 1` function is **not confirmed**.
+  the battery controls use. `virtualSn` is the device's own sn for
+  `SMART_METER`, `INVERTER`, `MICRO_INVERTER` and
+  `ENERGY_STORAGE_INTEGRATED_CABINET`, and is omitted otherwise.
+- **Reply** (2026-10-08, six writes): `{"code": "00000", "description", "traceId"}`,
+  with **no `data`**. `v1/remote/set` replies the same way.
+- **Latency.** `waitingForDevice: true` blocks until the device acknowledges:
+  1.0–1.6 s usually, but **29.4–30.2 s** for four of nine writes, all still
+  `00000`. A client needs a timeout well above 30 s for writes, and should not
+  hold up polling while one is in flight.
+- **Rejection:** `{"code": "P0215", "translationCode": "op_fail", "description":
+  "operation failed"}` after about 1 s (a grid-tie `mode_select` write).
+- **Gain on write.** Still unconfirmed on hardware, because every captured write
+  hit a `gain: 1` function. The web code points to **÷gain (display) units**: the
+  number input validates against `range ÷ gain` (`Wl(range, gain)`), sends the
+  typed value unchanged in `addressMap`, and then stores that same value in its
+  cache of read values, which are ÷gain.
 
 ### Start / stop
 
@@ -346,6 +521,13 @@ Tab `device_start_stop`:
 `80017` / `2043643517552594945` pair, which has no function behind it on this
 model. A write through `setDeviceFunctionParameters` has not been observed in a
 capture or on hardware yet.
+
+**A grid-tie inverter (GW5000-DNS-30) has no `run_stop`.** Its `device_start_stop`
+tab holds `start_up` 40330, `shutdown` 40331 (`funcKey: ShutDown`) and `restart`
+40332, all control 16 writing `0`, plus `rapid_shutdown` 40337 (switch). Its export
+limit is `grid-tie_power_limit` 40327 (switch), `limit_setting` 40328 (W) or 40336
+(%Pn), `hard_limit` 40345 and `mode_select` 40343 (single/three-phase). All are
+DSP/F7 rather than the All-in-One's ARM/F7 registers.
 
 ### Energy management highlights (All-in-One)
 
@@ -375,9 +557,20 @@ Higher-level endpoints the web page uses:
   "data": {<slot 3 fields as above>}, "waitingForDevice": true,
   "controlItemLogs": {...}}`. The body `controlItemLogs` carried is a
   human-readable audit trail (`start_t`, `end_t`, `switch`, `wkly_rep`,
-  `cd_mod`, `import_power_soc`, `discharge_limit_pw`). The captured "response"
-  echoed the request shape with the slot switched off, so it was most likely a
-  second request rather than the reply. The real reply shape is unknown.
+  `cd_mod`, `import_power_soc`, `discharge_limit_pw` or `rated_power`).
+  **Reply** (2026-10-08): `{"code": "00000", "description", "traceId"}`, with no
+  data. A `remote/get` straight afterwards showed the new value. Writes took 1.4 s,
+  16.8 s and 30.2 s.
+- **Slot count:** the web allows **8 slots on work-mode V3** (`get-work-mode`
+  `"3.0"`) and **4 otherwise**, even though `remote/get` always returns TOU1–TOU12.
+- **Scale:** `ChargeDischargePW` is per-mille on V2/V3; the web divides by 10 for
+  its log. On **V1** it is already a percentage (divisor 1). V1 also omits the
+  months and the cutoff SOC from its log.
+- **Capability bits** (`remote/get` `ARMFunction2`, `ARMFunction4`): ARMFunction2
+  bit 11 means TOU supports a discharge SOC, and ARMFunction4 bit 12 means TOU
+  supports power-limit mode.
+- **Naming a slot** (`tou/metric-config/save {"sn", "config": "<JSON string>"}`)
+  follows each `remote/set`, rewriting the whole `timePeriodNameMap`.
 - **Slot names:** `POST /sems-plant/api/tou/metric-config/query` `{"sn"}` →
   `data.config` is a JSON **string**:
   `{"timePeriodNameMap": {"TOU1": "", "TOU2": "10% export", ...}}`.
@@ -404,11 +597,93 @@ TOU4 → `47565–47570`. The other four register groups (`47577`, `47583`, `478
 while `/remote/get` offers **12** slots. The menu names (`工作组_N`) do **not** match
 slot numbers.
 
+The 2026-10-08 `GENERAL_FUNCTIONS` view lists the tou_mode work groups 1–8 as
+registers `47559, 47565, 47553, 47547, 47852, 47583, 47577, 47840`, so slot
+numbers stay unmapped to registers. Use the `remote/get`/`remote/set` `TOUn`
+shape. A month word of `8191` (bit 12 set) is the web's harmless extra "12".
+
+### Work modes (decoded from the web JS, 2026-10-08)
+
+**Running mode:** `remote/get {"functionName": ["INVCurrentWorkMode"]}`. The web's
+table:
+
+| value | mode | value | mode |
+|---|---|---|---|
+| -1 | AI | 9 | import_elec |
+| 1 | self_use | 10 | export_elec |
+| 2 | pv_priority_charging | 11 | bat_charging |
+| 3 | pv_priority_export | 12 | bat_discharge |
+| 4 | priority_import_power | 100 | backup_mode |
+| 5 | priority_export_power | 101, 102 | TOU |
+| 6 | energy_saving | 103, 104 | delayed_charge |
+| 7 | off_grid_mode | 105, 106 | peak_shave |
+| 8 | battery_standby | 107 | pv_priority_export_power |
+| | | 255 | forced_shutdown_standby |
+
+Anything else displays as self_use. This answers the "undocumented 102" below.
+
+**Configured modes** depend on `get-work-mode.workMode`:
+
+- **V1 (`"1.0"`): one exclusive mode.** The write is `remote/set {"functionName":
+  "SelfUseMode"|"BackupMode"|"TOUMode"|"OffGridMode", "data": {<same name>:
+  0|2|3|1}}`, and reads use the same four function names.
+- **V2 (`"2.0"`) and V3 (`"3.0"`): independent toggles.** One read covers them:
+  `remote/get {"functionName": ["SelfConsumption", "Backup", "OffGridEnable",
+  "TOUModeEnable", "DemandOrDelayed1", "DemandOrDelayed2", "GreenModeEnable",
+  "DelayedChargeEnable"]}`, adding `"AutoOffGridModeEnable"` when ARMFunction4
+  bit 0 is set. Observed values: `{"SelfConsumption": 1}`, `{"BackupModeEnable": 0,
+  "BackupPChargeP": 0}`, `{"TOUModeEnable": 1}`, `{"OffGridEnable": 0}`,
+  `GreenModeEnable: {}`, and each `DemandOrDelayedN` carries `…StartN/EndN/
+  WeekEnableN/WeekN/PowerLimitN/SOCN/MonthN`. The web treats a mode as active
+  when:
+  - backup: `BackupModeEnable == 1`. TOU: `TOUModeEnable == 1`. Off-grid:
+    `OffGridEnable == 1`.
+  - peak shave: `DemandOrDelayedWeekEnable{1,2} == 252`. Delayed charge: `== 250`,
+    and only when `DelayedChargeEnable` is also on.
+  - self-use: always shown as on.
+
+  Writes go through `remote/set`: `{"functionName": "TOUModeEnable", "data":
+  {"TOUModeEnable": 1}}`, `{"functionName": "Backup", "data": {"BackupModeEnable":
+  1}}`, `{"functionName": "OffGridEnable", "data": {"OffGridEnable": 1}}`. Peak
+  shave writes `{"DemandOrDelayedWeekEnableN": 252 on / 3 off, "DemandOrDelayedWeekN":
+  [...]}`, and delayed charge writes `250` on / `5` off followed by a second
+  `DelayedChargeEnable` write. Mutually exclusive: backup and peak shave; peak
+  shave and {backup, TOU, delayed charge}. V2 shows no off-grid card.
+- **Green mode** (V3) writes `{"functionName": "GreenModeEnable", "data":
+  {"OnGridSOCLowerLimit", "OffGridSOCLowerLimit", "OnGridSOCUpperLimit"}}`.
+- **Off-grid with auto switching** (ARMFunction4 bit 0) writes `data:
+  {"OffGridEnable", "AutoOffGridModeEnable", "AutoOffGridSOCUpperLimit",
+  "AutoOffGridSOCLowerLimit"}`.
+- ARMFunction4 bit 5 flags peak-shave v5 support.
+
 ### Other endpoints seen in the capture
 
 - `POST v1/remote/get` `{"functionName": ["INVCurrentWorkMode"], "sn"}` →
-  `{"INVCurrentWorkMode": 1}`. Read `102` later the same day, so it is an
-  undocumented enum.
+  `{"INVCurrentWorkMode": 1}`. Decoded under *Work modes* above.
+- `POST /sems-plant/api/web/device/station/page {"stationId", "current", "size"}` →
+  every device with **`model`** (`GW9.999K-EHA-G20`, `GW8.3-BAT-D-G20`,
+  `GW5000-DNS-30`), `brand`, `subtype`, `wirelessSignalStrength`, `status`.
+  One call gives every device's model.
+- `GET /sems-plant/api/equipments/<sn>/information?deviceType=&pwId=` → a list of
+  `{code, data}`: firmware `safetyVersion`, `ratedPower`, `gridConnStu`,
+  `bat1MRSn`/`bat2MRSn` (inverter); `commModuleVer`, `communicationMode`,
+  `wirelessSignalStrength` (dongle); `ctPoint` (meter).
+- Battery rack `telemetry` also carries `soh`, `vMaxCell`/`vMinCell` (mV),
+  `tempMaxCell`/`tempMinCell`, `pMaxChar`/`pMaxDischar` (kW), `version`,
+  `dcdcVersion`, `serCellTotal`.
+- `POST /sems-plant/api/v1/hems/power/<stationId> {"stationId", "items":
+  ["pSystem","soc","pBat","pConsum","pGrid"], "timeScale": 1, "timeZone": -11,
+  "startTime", "endTime"}` → **1-minute** station power for the range, as
+  `dataList[{item, powerData[{tp, power}]}]`.
+- `POST /sems-plant/api/portal/equipments/<sn>/timeSeriesData {"sn", "deviceType",
+  "stationId", "group", "module": "chart", "startDateTime", "endDateTime",
+  "timeGranularity": "1"}` → 5-minute device series. The groups come from
+  `GET equipments/<sn>/getMetricConfig?module=chart`.
+- `GET /sems-plant/api/web/device/getAllDeviceType?stationId=` → the device types
+  present. `GET /sems-plant/api/v1/hems/plant/basic?plantId=` → `{supportVpp}`.
+- `GET /sems-user/api/v1/auth/default-service` (global host, before login) →
+  the region, e.g. `"au"`.
+- `POST v1/firmware-management/exist-remind {"plantId"}` → `{existRemind, count}`.
 - `POST v1/address/remote/battery/GetBatteryList` `{"sn"}` → the configured
   battery model tree (`high`/`low` voltage). Each leaf has a `battery` with
   `model` (`GW5.1/8.3-BAT-D-G20`), `manufacturer`, `capacity`, charge/discharge
@@ -426,13 +701,16 @@ Mostly resolved by the 2026-09-29 live verification. What remains:
 
 - `alarm/detail` parameters (`P0214 missing parameter` for `{id, warningid}`).
   Not needed in practice: `alarm/page` returns the full row already.
-- Whether `alarm/page` honours `statusList`, `beginTime`/`endTime`, `orderBy` and
-  `deviceSn`. Those names all exist in the Hermes string table and the endpoint
-  accepts them without complaint, but every test account returned the same rows
-  with and without them, so filtering could not be observed. `pageIndex`,
-  `pageSize` and `stationIds` are confirmed to work.
+- `alarm/page` filtering is settled (see *Alarms*): the web uses `status`,
+  `startTime`/`endTime`, `confirmed` and friends rather than `statusList`/`beginTime`.
 - The numeric `warninglevel` field's scale (0 in every observed row).
-- `pSystem`/`pConsum` sign conventions (only `pBat` and `pGrid` were confirmed).
+- Whether `setDeviceFunctionParameters` takes raw or ÷gain values for `gain ≠ 1`
+  (the web code points to ÷gain).
+- Second-data MQTT: credential lifetime, the limit on concurrent clients, and the
+  battery `a`/`v` fields.
+- A smart meter's `telemetry` returned `totalPac` and `pAc` with different values
+  in one response (2.204 vs 3.437 kW), but the same value over MQTT. Which one is grid
+  power is unsettled.
 - Full login request body beyond `{account, pwd}` — not needed, auth is solved
   by existing clients.
 
