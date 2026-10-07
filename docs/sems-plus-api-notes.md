@@ -580,12 +580,22 @@ Field meanings:
 - `TOUWeekEnable`: `249` = slot enabled, `6` = disabled (the function tree lists
   these as the day function's `highAttr`). One unused slot read `85`, meaning unknown.
 - `TOUWeek`: `0` = Sunday ... `6` = Saturday.
-- `TOUMonth`: `0` = January ... `11` = December. The web UI also sends `12`,
-  which is not a month and seems harmless.
-- `ChargeDischargePW`: per-mille of rated power, **positive = discharge,
-  negative = charge** (`-1000` = charge at full rate; `320` logged as
-  `cd_mod: discharge`, `discharge_limit_pw: 32`).
-- `ChargeCutOffSet`: SOC % at which the slot stops.
+- `TOUMonth`: `0` = January ... `11` = December. **CORRECTED:** a `12` is not
+  noise. On a **discharge** slot it selects the *power limit method*: with `12`
+  the slot's power limits **export** to the grid ("GRID"), without it the
+  **battery discharge** ("BAT"). The web reads it as
+  `TOUMonth.includes(12) ? "GRID" : "BAT"`, sends it only for discharge slots,
+  and only offers the choice when ARMFunction4 bit 12 is set. It strips `12`
+  before showing or logging months.
+- `ChargeDischargePW`: per-mille of rated power. **Zero or negative = charge,
+  positive = discharge**: the web's mode is `PW <= 0 ? charge : discharge`, so a
+  discharge slot cannot have zero power. Charging, the magnitude is "charging
+  from grid power". Discharging, it is the discharge power, or the export
+  power with the export limit method. (`-1000` = charge at full rate; `320`
+  logged as `cd_mod: discharge`, `discharge_limit_pw: 32`.)
+- `ChargeCutOffSet`: SOC % at which the slot stops. The web labels it "end
+  charge SOC" on charge slots and "discharge cutoff SOC" on discharge slots;
+  the latter only appears with ARMFunction2 bit 11.
 
 The same slots are registers in the `tou_mode` menu, six per slot: start, end
 (HHmm as an int, `1800`), day word (high byte = enable `249`/`6`, low byte =
@@ -600,7 +610,8 @@ slot numbers.
 The 2026-10-08 `GENERAL_FUNCTIONS` view lists the tou_mode work groups 1–8 as
 registers `47559, 47565, 47553, 47547, 47852, 47583, 47577, 47840`, so slot
 numbers stay unmapped to registers. Use the `remote/get`/`remote/set` `TOUn`
-shape. A month word of `8191` (bit 12 set) is the web's harmless extra "12".
+shape. A month word of `8191` (bit 12 set) is the export limit method, the
+register form of month `12` above.
 
 ### Work modes (decoded from the web JS, 2026-10-08)
 
