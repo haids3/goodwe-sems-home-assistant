@@ -660,6 +660,33 @@ Anything else displays as self_use. This answers the "undocumented 102" below.
   [...]}`, and delayed charge writes `250` on / `5` off followed by a second
   `DelayedChargeEnable` write. Mutually exclusive: backup and peak shave; peak
   shave and {backup, TOU, delayed charge}. V2 shows no off-grid card.
+- **Which modes a device offers:** `getDeviceFunctionTabMenus {"sn", "module":
+  "WORK_MODE", "menuCode"}`. Its children with `visible: 0` are the mode cards
+  the web shows, by `funcKey` (`selfUseMode`, `backupMode`, `TOUMode`,
+  `offGridMode`, `peakShaveMode`, `delayMode`; `greenMode` and
+  `systemBackupMode` were hidden on the All-in-Ones checked).
+- **Which DemandOrDelayed setting holds which mode** (the web's rule): if
+  `DemandOrDelayedWeekEnable1` is 252/3 or `…2` is 250/5, setting 1 is peak
+  shaving and 2 delayed charge; if `…1` is 250/5 or `…2` is 252/3, the other
+  way round; otherwise 1 = peak shaving, 2 = delayed charge. A never-used
+  setting reads `85` and is saved as "off" (3 or 5).
+- **Peak shaving editor** writes to its setting N: `Start`, `End`, `SOC`
+  (battery reserve %), `PowerLimit` (**grid import limit in kW**, max 655.34 on
+  V3 and 500 otherwise), `Week` all days, and `WeekEnable` kept. Firmware with
+  ARMFunction4 bit 5 also takes `PeakshavingStart1..4`/`End1..4` extra windows
+  (`"255:255"` = unused). Log `{peak_shaving_soc, import_pw_peaklimit, start_t,
+  end_t}`.
+- **Delayed charge editor** writes `End` (the web labels it the *start* time),
+  `PowerLimit` (**export limit, per-mille of rated power**), `Month`,
+  `ChargePriority` (0 = PV charges the battery first), `WeekEnable` kept and
+  `Week` all days. Log `{peak_power_sales_limit, pv_prioritize_battery_charge,
+  end_t, month}`; the web maps priority 0 to `"export_grid_first"`.
+- **Backup editor** writes `{"functionName": "Backup", "data":
+  {"BackupChargeModelEnable": 0|1, "BackupPChargeP": <%>}}`, sending the power
+  only with grid charging on. Reads return `BackupModeEnable` and
+  `BackupPChargeP` but **not** `BackupChargeModelEnable`. The register behind it,
+  47870 (`gird_pur_charge`, sic), returns no cached value until it has been
+  written.
 - **Green mode** (V3) writes `{"functionName": "GreenModeEnable", "data":
   {"OnGridSOCLowerLimit", "OffGridSOCLowerLimit", "OnGridSOCUpperLimit"}}`.
 - **Off-grid with auto switching** (ARMFunction4 bit 0) writes `data:
