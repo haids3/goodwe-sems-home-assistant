@@ -635,9 +635,22 @@ Anything else displays as self_use. This answers the "undocumented 102" below.
 
 **Configured modes** depend on `get-work-mode.workMode`:
 
-- **V1 (`"1.0"`): one exclusive mode.** The write is `remote/set {"functionName":
-  "SelfUseMode"|"BackupMode"|"TOUMode"|"OffGridMode", "data": {<same name>:
-  0|2|3|1}}`, and reads use the same four function names.
+- **V1 (`"1.0"`): one exclusive mode.** Each mode has a code: self-use `0`,
+  off-grid `1`, backup `2`, TOU `3` (`Kn` in the web JS). The web reads
+  `remote/get {"functionName": ["SelfUseMode", "BackupMode", "TOUMode",
+  "OffGridMode"]}` and shows a mode as active when `value[<name>]` equals its
+  code (likely one register behind all four). Selecting a mode writes
+  `remote/set {"functionName": "TOUMode", "data": {"TOUMode": 3},
+  "controlItemLogs": {"TOU": "remote_Switch_on"}, "waitingForDevice": true, ...}`
+  (log key = the mode's `transKey`: `self_use`, `backup_mode`, `TOU`,
+  `off_grid_mode`) after a "confirm mode switch" dialog. A card cannot be
+  switched off: the toggle always writes that mode's code. Cards come from the
+  same `WORK_MODE` menu (`visible: 0`); only TOU has a settings page on V1, so
+  there are no backup, peak-shaving or delayed-charge settings.
+  V1 TOU editor (2026-10-10): reads only `TOU1`–`TOU4`; `ChargeDischargePW` is a
+  whole percentage (no ÷10); no months and no month `12`, so no limit-method
+  choice; no charge-slot cutoff SOC (the discharge cutoff SOC still follows
+  ARMFunction2 bit 11).
 - **V2 (`"2.0"`) and V3 (`"3.0"`): independent toggles.** One read covers them:
   `remote/get {"functionName": ["SelfConsumption", "Backup", "OffGridEnable",
   "TOUModeEnable", "DemandOrDelayed1", "DemandOrDelayed2", "GreenModeEnable",
