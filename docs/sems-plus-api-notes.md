@@ -522,6 +522,18 @@ Tab `device_start_stop`:
 model. A write through `setDeviceFunctionParameters` has not been observed in a
 capture or on hardware yet.
 
+**CORRECTED (2026-10-10): the `run_stop` value is not the run state.** In the
+app's local register table 45218 is a write-only command, "On (Allow to Grid)",
+range `[1]`; 45219 is "Off (Forbid to Grid)". The cached value is only the last
+command sent through SEMS+: a running All-in-One (device status 5) read `0`,
+and the web showed it as stopped. Use the device status for the run state.
+Another All-in-One with the same model, firmware string `010101`, ARM 745 and
+work mode 3.0 has no `run_stop` at all in its `device_start_stop` tab (only
+`restart`), so SEMS+ decides per device on something it does not expose.
+**No firmware versions beyond that:** none of the version registers (35016
+DSP master, 35017 DSP slave, 35019 ARM, 10401–10403, 33200–33217) are in the
+control tree (134 addresses), so SEMS+ cannot read them.
+
 **A grid-tie inverter (GW5000-DNS-30) has no `run_stop`.** Its `device_start_stop`
 tab holds `start_up` 40330, `shutdown` 40331 (`funcKey: ShutDown`) and `restart`
 40332, all control 16 writing `0`, plus `rapid_shutdown` 40337 (switch). Its export
